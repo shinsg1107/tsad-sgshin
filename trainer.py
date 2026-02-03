@@ -128,7 +128,7 @@ class Trainer:
     def _get_loss_meters(self):
         return [AverageMeter(f"Loss {loss_name}", ":.4e") for loss_name in self.loss_names]
 
-    @staticmethod
+    @staticmethod #self안넣음, 클래스 독립이지만 내부에 존재
     def _update_metric_meters(metric_meters, metrics, batch_size):
         assert len(metric_meters) == len(metrics)
         for metric_meter, metric in zip(metric_meters, metrics):
@@ -266,7 +266,7 @@ class Trainer:
 
 def build_trainer(cfg, model):
     trainer_classes = {
-        
+        "ORACLEAD":"models.oracle.trainer_oracle.TrainerORACLEAD",
     }
 
     model_name = cfg.MODEL.NAME
