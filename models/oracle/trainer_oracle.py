@@ -3,10 +3,18 @@ import torch
 import torch.nn.functional as F
 
 from trainer import Trainer, prepare_inputs
-from utils.misc import mkdir
 
 
 class OracleADTrainer(Trainer):
+    """
+    OracleAD trainer that:
+      1) builds SLS each epoch from c_star (mean D over all train windows in the epoch)
+      2) uses deviation loss from START_EPOCH onward (when SLS is available)
+      3) computes pred/recon losses in the trainer from model outputs:
+           pred_loss  = MSE(x_hat_next, y_next)
+           recon_loss = MSE(x_hat_past, x_past_true)
+    """
+
     def __init__(self, cfg, model):
         super().__init__(cfg, model)
 
@@ -14,13 +22,14 @@ class OracleADTrainer(Trainer):
         self.lambda_recon = float(self.cfg.ORACLEAD.LAMBDA_RECON)
         self.lambda_dev = float(self.cfg.ORACLEAD.LAMBDA_DEV)
 
-        # SLS state (reference template)
-        self.sls = None  # [N,N] on device when used
+        # If your paper uses L2 (not squared) for D_ij, set this False.
+        # Your current SLS builder uses squared L2 distance (||a-b||^2).
+        self.use_squared_l2 = bool(getattr(self.cfg.ORACLEAD.SLS, "USE_SQUARED_L2", True))
 
-        # accumulator for building SLS at end of each epoch
+        # SLS state (reference template)
+        self.sls = None  # [N,N] on CPU; moved to GPU when used
         self._reset_sls_accum()
 
-        # (선택) 이전 학습 이어가기용: sls_latest.pt 있으면 로드
         sls_path = os.path.join(self.cfg.TRAIN.CHECKPOINT_DIR, "sls_latest.pt")
         if os.path.isfile(sls_path):
             self.sls = torch.load(sls_path, map_location="cpu")
@@ -34,15 +43,20 @@ class OracleADTrainer(Trainer):
     def _pairwise_sq_l2(c_star: torch.Tensor) -> torch.Tensor:
         """
         c_star: [B,N,D]
-        return: D_batch [B,N,N] with squared L2 distances
-        Efficient: ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a·b
+        return: [B,N,N] with squared L2 distances
         """
-        # [B,N,1]
-        x2 = (c_star * c_star).sum(dim=-1, keepdim=True)
-        # [B,N,N]
-        prod = torch.matmul(c_star, c_star.transpose(1, 2))
+        x2 = (c_star * c_star).sum(dim=-1, keepdim=True)          # [B,N,1]
+        prod = torch.matmul(c_star, c_star.transpose(1, 2))       # [B,N,N]
         dist2 = x2 + x2.transpose(1, 2) - 2.0 * prod
         return dist2.clamp_min_(0.0)
+
+    def _pairwise_l2(self, c_star: torch.Tensor) -> torch.Tensor:
+        """
+        c_star: [B,N,D]
+        return: [B,N,N] with L2 distances (not squared)
+        """
+        dist2 = self._pairwise_sq_l2(c_star)
+        return (dist2 + 1e-12).sqrt()
 
     def _accumulate_sls(self, D_batch: torch.Tensor):
         """
@@ -51,10 +65,7 @@ class OracleADTrainer(Trainer):
         """
         with torch.no_grad():
             D_sum = D_batch.detach().sum(dim=0)  # [N,N]
-            if self.sls_sum is None:
-                self.sls_sum = D_sum
-            else:
-                self.sls_sum += D_sum
+            self.sls_sum = D_sum if self.sls_sum is None else (self.sls_sum + D_sum)
             self.sls_count += int(D_batch.size(0))
 
     def _finalize_and_save_sls(self):
@@ -67,7 +78,7 @@ class OracleADTrainer(Trainer):
             return
 
         sls = (self.sls_sum / float(self.sls_count)).cpu()  # [N,N] on CPU
-        self.sls = sls  # keep CPU copy; moved to GPU when used
+        self.sls = sls
 
         if bool(getattr(self.cfg.ORACLEAD.SLS, "SAVE_EVERY_EPOCH", True)):
             ckpt_dir = self.cfg.TRAIN.CHECKPOINT_DIR
@@ -83,42 +94,62 @@ class OracleADTrainer(Trainer):
 
     def train_epoch(self):
         # epoch 시작: 이번 epoch에서 dev loss를 쓸지 결정
-        use_dev = (self.cur_epoch >= self.start_sls_epoch) and (self.sls is not None)
-        self.use_dev_loss = use_dev
+        self.use_dev_loss = (self.cur_epoch >= self.start_sls_epoch) and (self.sls is not None)
 
-        # 이번 epoch 끝에서 업데이트할 SLS 누적기 초기화
         self._reset_sls_accum()
-
-        # 원래 Trainer loop 수행 (각 batch마다 train_step 호출)
         super().train_epoch()
-
-        # epoch 끝: 이번 epoch 데이터로 SLS 구축/저장
         self._finalize_and_save_sls()
+
+    def _compute_pred_recon_loss(self, out: dict):
+        """
+        out keys expected:
+          x_hat_next: [B,N] (or [B,N,1] -> we squeeze)
+          y_next:     [B,N]
+          x_hat_past: [B,N,T] (or [B,N,T,1] -> we squeeze)
+          x_past_true:[B,N,T]
+        """
+        x_hat_next = out["x_hat_next"]
+        y_next = out["y_next"]
+        if x_hat_next.dim() == 3 and x_hat_next.size(-1) == 1:
+            x_hat_next = x_hat_next.squeeze(-1)  # [B,N]
+
+        x_hat_past = out["x_hat_past"]
+        x_past_true = out["x_past_true"]
+        if x_hat_past.dim() == 4 and x_hat_past.size(-1) == 1:
+            x_hat_past = x_hat_past.squeeze(-1)  # [B,N,T]
+
+        # MSE (paper text uses L2 norms; MSE is fine up to scaling. If you want pure L2, change reduction.)
+        pred_loss = F.mse_loss(x_hat_next, y_next)
+        recon_loss = F.mse_loss(x_hat_past, x_past_true)
+        return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):
         x = self._unwrap_x(inputs)
         out = self.model(x)
 
-        pred_loss = out["pred_loss"]     # scalar tensor (detach X)
-        recon_loss = out["recon_loss"]   # scalar tensor (detach X)
-        c_star = out["c_star"]           # [B,N,D] (detach X)
+        # 1) compute losses from model outputs
+        pred_loss, recon_loss, _, _ = self._compute_pred_recon_loss(out)
+        c_star = out["c_star"]  # [B,N,D]
 
-        # D(k) 계산 + SLS 누적 (항상 누적: 1 epoch 끝에 SLS 만들기 위해)
-        D_batch = self._pairwise_sq_l2(c_star)    # [B,N,N]
+        # 2) build dissimilarity matrix D(k) and accumulate SLS (always)
+        if self.use_squared_l2:
+            D_batch = self._pairwise_sq_l2(c_star)  # [B,N,N]
+        else:
+            D_batch = self._pairwise_l2(c_star)     # [B,N,N]
         self._accumulate_sls(D_batch)
 
-        # deviation/dev loss (첫 epoch에는 0)
+        # 3) deviation loss
         if self.use_dev_loss:
             sls = self.sls.to(D_batch.device, dtype=D_batch.dtype)  # [N,N]
-            diff = D_batch - sls[None, :, :]
+            diff = D_batch - sls[None, :, :]                        # [B,N,N]
             N = diff.size(1)
-            dev_per_sample = (diff * diff).sum(dim=(1, 2)) / float(N * N)  # [B]
-            dev_loss = dev_per_sample.mean()
+            dev_loss = (diff.pow(2).sum(dim=(1, 2)) / float(N * N)).mean()
             total = pred_loss + self.lambda_recon * recon_loss + self.lambda_dev * dev_loss
         else:
-            dev_loss = pred_loss.new_zeros(())  # meter 길이 유지
+            dev_loss = pred_loss.new_zeros(())
             total = pred_loss + self.lambda_recon * recon_loss
 
+        # 4) optimize
         self.optimizer.zero_grad()
         total.backward()
         if self.cfg.SOLVER.GRADIENT_CLIP:
@@ -135,19 +166,20 @@ class OracleADTrainer(Trainer):
         x = self._unwrap_x(inputs)
         out = self.model(x)
 
-        pred_loss = out["pred_loss"]
-        recon_loss = out["recon_loss"]
+        pred_loss, recon_loss, _, _ = self._compute_pred_recon_loss(out)
         c_star = out["c_star"]
 
-        # eval에서는 SLS를 업데이트하지 않음 (논문도 “reference”로 사용)
-        D_batch = self._pairwise_sq_l2(c_star)
+        if self.use_squared_l2:
+            D_batch = self._pairwise_sq_l2(c_star)
+        else:
+            D_batch = self._pairwise_l2(c_star)
 
         use_dev = (self.cur_epoch >= self.start_sls_epoch) and (self.sls is not None)
         if use_dev:
             sls = self.sls.to(D_batch.device, dtype=D_batch.dtype)
             diff = D_batch - sls[None, :, :]
             N = diff.size(1)
-            dev_loss = ((diff * diff).sum(dim=(1, 2)) / float(N * N)).mean()
+            dev_loss = (diff.pow(2).sum(dim=(1, 2)) / float(N * N)).mean()
             total = pred_loss + self.lambda_recon * recon_loss + self.lambda_dev * dev_loss
         else:
             dev_loss = pred_loss.new_zeros(())

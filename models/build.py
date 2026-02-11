@@ -7,7 +7,7 @@ def build_model(cfg):
     model_name = cfg.MODEL.NAME
 
     model_mapping = {
-        "Oracle": ORACLEAD,
+        "ORACLEAD": ORACLEAD,
     }
 
     if model_name in model_mapping:

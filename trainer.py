@@ -266,7 +266,7 @@ class Trainer:
 
 def build_trainer(cfg, model):
     trainer_classes = {
-        "ORACLEAD":"models.oracle.trainer_oracle.TrainerORACLEAD",
+        "ORACLEAD":"models.oracle.trainer_oracle.OracleADTrainer",
     }
 
     model_name = cfg.MODEL.NAME

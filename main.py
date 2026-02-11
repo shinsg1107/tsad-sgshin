@@ -2,7 +2,7 @@ from models.build import build_model
 from utils.parser import parse_args, load_config
 from trainer import build_trainer
 from utils.misc import mkdir, set_seeds, set_devices
-#from models.carots.predictor import Predictor
+from models.oracle.detector import DetectorOracleAD
 
 def main():
     args = parse_args()
@@ -27,7 +27,7 @@ def main():
         trainer.train()
     if cfg.TEST.ENABLE:
         model = trainer.load_best_model()
-        predictor = Predictor(cfg, model)
+        predictor = DetectorOracleAD(cfg, model)
         predictor.predict()
             
 if __name__ == '__main__':

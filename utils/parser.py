@@ -62,13 +62,6 @@ def load_config(args):
         cfg.DATA.N_VAR = valid_datasets["MSL"]
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
-    # Update model-specific configurations
-    cfg.TIMESNET.enc_in = cfg.DATA.N_VAR
-    cfg.TIMESNET.c_out = cfg.DATA.N_VAR
-    cfg.ITRANSFORMER.enc_in = cfg.DATA.N_VAR
-    cfg.ITRANSFORMER.c_out = cfg.DATA.N_VAR
-    cfg.CUTS_PLUS.N_NODES = cfg.DATA.N_VAR
-    cfg.CUTS_PLUS.N_GROUPS = cfg.DATA.N_VAR
     
     
     cfg.TRAIN.CHECKPOINT_DIR = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.DATA.NAME)
