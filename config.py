@@ -27,7 +27,7 @@ _C.DATA.WIN_SIZE = 10
 _C.DATA.TRAIN_STEP = 1
 _C.DATA.TEST_STEP = 1
 _C.DATA.N_VAR = 51
-_C.DATA.TRAIN_RATIO = 0.8
+_C.DATA.TRAIN_RATIO = 1
 _C.DATA.DOWNSAMPLE_RATE = 1
 
 
@@ -43,7 +43,8 @@ _C.TRAIN.CHECKPOINT_DIR = 'results/'
 # path to checkpoint to resume training
 _C.TRAIN.RESUME = ''
 # epoch period to evaluate on a validation set
-_C.TRAIN.EVAL_PERIOD = 5
+_C.TRAIN.EVAL_PERIOD = 1
+_C.TRAIN.EVAL_ENABLE = False
 # iteration frequency to print progress meter
 _C.TRAIN.PRINT_FREQ = 100
 _C.TRAIN.METRIC_BEST = float("inf")
@@ -66,7 +67,7 @@ _C.TEST.SPLIT = 'test'
 _C.TEST.BATCH_SIZE = 1024
 _C.TEST.SHUFFLE = False
 _C.TEST.DROP_LAST = False
-_C.TEST.POINT_ADJUST = True
+_C.TEST.POINT_ADJUST = False
 _C.TEST.VIS = True
 _C.TEST.THRESHOLD = CN()
 _C.TEST.THRESHOLD.TYPE = 'best_f1'  # ratio, best_f1
@@ -111,7 +112,7 @@ _C.ORACLEAD.SLS = CN()
 _C.ORACLEAD.SLS.START_EPOCH = 1   
 _C.ORACLEAD.SLS.SAVE_EVERY_EPOCH = True
 _C.ORACLEAD.SLS.SAVE_EVERY_EVAL = True
-_C.ORACLEAD.SLS.USE_SQUARED_L2 = False
+_C.ORACLEAD.SLS.USE_SQUARED_L2 = True
 
 #LSTM Encoder
 _C.ORACLEAD.LSTM_ENCODER = CN()
@@ -134,7 +135,7 @@ _C.ORACLEAD.MHSA.PROJ_DROPOUT = 0 # 없으면 DROPOUT을 fallback
 _C.ORACLEAD.MHSA.DROPOUT = 0       # optional fallback
 
 _C.ORACLEAD.MHSA.PRE_NORM = True
-_C.ORACLEAD.MHSA.RESIDUAL = True
+_C.ORACLEAD.MHSA.RESIDUAL = False
 _C.ORACLEAD.MHSA.MASK_SELF = False   # optional
 
 #LSTM Decoder

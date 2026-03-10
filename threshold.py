@@ -4,7 +4,6 @@ from functools import cached_property
 import numpy as np
 import sklearn.metrics as metrics
 
-
 class Thresholder:
     def __init__(
             self,

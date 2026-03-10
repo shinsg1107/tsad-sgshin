@@ -12,8 +12,8 @@ from datasets.loader import get_train_dataloader, get_val_dataloader, get_test_d
 from trainer import prepare_inputs
 from utils.misc import mkdir
 from models.oracle.score_oracle import ScorerOracleAD
-from models.oracle.basic_metrics import get_vus_metrics
-
+from evaluation.annomaly_metrics import get_metrics
+from evaluation.basic_metrics import get_median_anomaly_length
 class DetectorOracleAD:
     def __init__(self, cfg, model):
         self.cfg = cfg.clone()
@@ -133,26 +133,28 @@ class DetectorOracleAD:
     def get_results(scores, pred_pa, labels, slidingWindow):
         results = {}
 
-        auroc = float(roc_auc_score(labels, scores))
-        results.update({"AUROC": auroc})
+        # auroc = float(roc_auc_score(labels, scores))
+        # results.update({"AUROC": auroc})
 
-        precision, recall, thresholds = precision_recall_curve(labels, scores)
-        auprc = float(auc(recall, precision))
-        results.update({"AUPRC": auprc})
+        # precision, recall, thresholds = precision_recall_curve(labels, scores)
+        # auprc = float(auc(recall, precision))
+        # results.update({"AUPRC": auprc})
 
-        f1 = 2 * (precision * recall) / (precision + recall + 1e-12)
-        f1_best = np.nanmax(f1)
-        precision_best = precision[np.argmax(f1)]
-        recall_best = recall[np.argmax(f1)]
-        results.update({"Precision": precision_best, "Recall": recall_best, "F1": f1_best})
+        # f1 = 2 * (precision * recall) / (precision + recall + 1e-12)
+        # f1_best = np.nanmax(f1)
+        # precision_best = precision[np.argmax(f1)]
+        # recall_best = recall[np.argmax(f1)]
+        # results.update({"Precision": precision_best, "Recall": recall_best, "F1": f1_best})
 
-        #논문의 VUS 계산 방법 사용(score 정규화)
-        scores_norm = MinMaxScaler(feature_range=(0, 1)).fit_transform(
-            scores.reshape(-1, 1)).ravel()
-        print(f"slidingWindow: {slidingWindow}")
-        print(f"labels sum: {labels.sum()}, len: {len(labels)}")
-        vus = get_vus_metrics(scores_norm, labels, slidingWindow=slidingWindow)
-        results.update({"VUS_PR": vus["VUS-PR"], "VUS_ROC": vus["VUS-ROC"]})
+        vus_window = get_median_anomaly_length(labels)
+        results = get_metrics(
+            score=scores, 
+            labels=labels, 
+            slidingWindow=vus_window, 
+            pred=None, 
+            version='default', # 메모리 절약 모드 : opt_mem
+            thre=200          #N=250 (또는 200)
+        )
 
         if pred_pa is not None:
             tp = np.sum((pred_pa == 1) & (labels == 1))

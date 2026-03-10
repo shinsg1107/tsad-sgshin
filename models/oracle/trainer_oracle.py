@@ -40,6 +40,9 @@ class OracleADTrainer(Trainer):
         self.writer = SummaryWriter(log_dir=str(tb_dir))
         print(f"TensorBoard logs: {tb_dir}")
 
+        # Config에서 EVAL_ENABLE 여부 확인 (기본값은 False로 안전하게 처리)
+        eval_enable = getattr(self.cfg.TRAIN, "EVAL_ENABLE", False)
+
         for cur_epoch in tqdm(range(self.cfg.SOLVER.START_EPOCH, self.cfg.SOLVER.MAX_EPOCH)):
             train_losses = self.train_epoch()
 
@@ -48,7 +51,8 @@ class OracleADTrainer(Trainer):
                 for name, val in train_losses.items():
                     self.writer.add_scalar(f"Train/{name}", val, cur_epoch)
 
-            if self._is_eval_epoch(cur_epoch):
+            # 1. EVAL_ENABLE이 True일 때만 기존의 검증(Validation) 로직 수행
+            if eval_enable and self._is_eval_epoch(cur_epoch):
                 tracking_meter, val_losses = self.eval_epoch()
 
                 # val loss 로깅
@@ -66,7 +70,13 @@ class OracleADTrainer(Trainer):
                     self.save_best_model()
                     metric_best = tracking_meter.avg
 
-                # eval period마다 test 실행 및 로깅
+            # 2. EVAL_ENABLE이 False라면, 모델을 최신 상태로 덮어쓰며 저장 (논문 방식)
+            elif not eval_enable:
+                # Trainer 구조에 맞게 최신 모델을 저장. (save_best_model을 그대로 호출하거나 별도 함수 사용)
+                self.save_best_model() 
+
+            # 3. Test 로깅: 학습 중간에 Test 점수를 텐서보드로 보고 싶을 때만 수행
+            if self._is_eval_epoch(cur_epoch):
                 self._log_test_metrics(cur_epoch)
 
             self.cur_epoch += 1
