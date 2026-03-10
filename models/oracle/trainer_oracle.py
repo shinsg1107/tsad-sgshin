@@ -4,7 +4,6 @@ import torch.nn.functional as F
 
 from trainer import Trainer, prepare_inputs
 
-
 class OracleADTrainer(Trainer):
     """
     OracleAD trainer that:
@@ -119,8 +118,10 @@ class OracleADTrainer(Trainer):
             x_hat_past = x_hat_past.squeeze(-1)  # [B,N,T]
 
         # MSE (paper text uses L2 norms; MSE is fine up to scaling. If you want pure L2, change reduction.)
-        pred_loss = F.mse_loss(x_hat_next, y_next)
-        recon_loss = F.mse_loss(x_hat_past, x_past_true)
+        # pred_loss = F.mse_loss(x_hat_next, y_next)
+        # recon_loss = F.mse_loss(x_hat_past, x_past_true)
+        pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
+        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
         return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):

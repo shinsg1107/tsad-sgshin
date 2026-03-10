@@ -5,7 +5,7 @@
 import argparse
 import sys
 import os
-
+import time
 from config import get_cfg_defaults
 
 
@@ -51,10 +51,8 @@ def load_config(args):
     }
     if cfg.DATA.NAME == 'SWaT':
         cfg.DATA.N_VAR = valid_datasets["SWaT"]
-        cfg.DATA.DOWNSAMPLE_RATE = 5
     elif cfg.DATA.NAME == 'WADI':
         cfg.DATA.N_VAR = valid_datasets["WADI"]
-        cfg.DATA.DOWNSAMPLE_RATE = 5
         cfg.SCORER.TYPE = "cos"
     elif "SMD" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["SMD"]
@@ -63,8 +61,8 @@ def load_config(args):
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
     
-    
-    cfg.TRAIN.CHECKPOINT_DIR = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.DATA.NAME)
-    cfg.RESULT_DIR = os.path.join(cfg.RESULT_DIR, cfg.DATA.NAME)
+    date = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+    cfg.TRAIN.CHECKPOINT_DIR = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.DATA.NAME, date)
+    cfg.RESULT_DIR = os.path.join(cfg.RESULT_DIR, cfg.DATA.NAME, date)
 
     return cfg

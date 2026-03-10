@@ -27,11 +27,23 @@ class Thresholder:
 
     @cached_property
     def threshold_best_f1(self):
-        precision, recall, thresholds = metrics.precision_recall_curve(self.test_labels, self.test_scores)
-        best_f1_idx = np.argmax(2 * precision * recall / (precision + recall + 1e-12))
-        threshold_best_f1 = thresholds[best_f1_idx]
+        N = 200
+        s_min, s_max = self.test_scores.min(), self.test_scores.max()
+        candidates = [s_min + i / (N - 1) * (s_max - s_min) for i in range(N)]
 
-        return threshold_best_f1
+        best_f1 = -1
+        best_threshold = candidates[0]
+        
+        for tau in candidates:
+            preds = (self.test_scores >= tau).astype(int)
+            precision, recall, f1, _ = metrics.precision_recall_fscore_support(
+                self.test_labels, preds, average='binary', zero_division=0
+            )
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = tau
+        
+        return best_threshold
 
     @cached_property
     def threshold_ratio(self):

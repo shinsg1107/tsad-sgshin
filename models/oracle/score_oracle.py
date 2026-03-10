@@ -55,7 +55,8 @@ class ScorerOracleAD:
         if self.sls is None:
             D_score = torch.zeros_like(P)
         else:
-            D_t = self.pairwise_sq_l2(c_star)  # [B,N,N]
+            use_sq = getattr(self.cfg.ORACLEAD.SLS, "USE_SQUARED_L2", False)
+            D_t = self.pairwise_sq_l2(c_star) if use_sq else (self.pairwise_sq_l2(c_star) + 1e-12).sqrt()
             sls = self.sls.to(D_t.device, dtype=D_t.dtype)  # [N,N]
             D_score = self.frob_norm(D_t - sls[None])        # [B]
 

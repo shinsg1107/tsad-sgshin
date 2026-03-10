@@ -168,7 +168,11 @@ class LSTMDecoder(nn.Module):
 
         for i in range(N):
             ci = c_star[:, i, :]                                     # [B, D]
-            dec_in_i = ci.unsqueeze(1).expand(B, self.T, D)          # [B, T, D]
+            dec_in_i = torch.zeros(B, self.T, 1, device=ci.device, dtype=ci.dtype)  # [B, T, 1]
+
+            # c* as initial hidden state (projection 필요 - D != hidden_dim일 수 있음)
+            h0 = ci.unsqueeze(0).expand(self.num_layers, B, self.hidden_dim).contiguous()  # [num_layers, B, H]
+            c0 = torch.zeros_like(h0)
 
             h_seq_i, (h_n, _) = self.lstm_list[i](dec_in_i)          # [B, T, lstm_out]
             recon_i = self.head_recon_list[i](h_seq_i)               # [B, T, out_dim]

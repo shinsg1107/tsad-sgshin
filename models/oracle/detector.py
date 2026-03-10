@@ -5,13 +5,14 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
+from sklearn.preprocessing import MinMaxScaler
 
 from threshold import Thresholder
 from datasets.loader import get_train_dataloader, get_val_dataloader, get_test_dataloader
 from trainer import prepare_inputs
 from utils.misc import mkdir
 from models.oracle.score_oracle import ScorerOracleAD
-
+from models.oracle.basic_metrics import get_vus_metrics, get_median_anomaly_length
 
 class DetectorOracleAD:
     def __init__(self, cfg, model):
@@ -33,7 +34,6 @@ class DetectorOracleAD:
 
         self.scorer = ScorerOracleAD(self.cfg, self.model)
 
-        #여기 cfg가 아니라 self.cfg로 만들어야 위 설정이 반영됨
         self.train_loader = get_train_dataloader(self.cfg)
         self.val_loader = get_val_dataloader(self.cfg)
         self.test_loader = get_test_dataloader(self.cfg)
@@ -59,8 +59,9 @@ class DetectorOracleAD:
         else:
             pred_pa = None
 
-        results = self.get_results(self.test_scores, pred_pa, self.test_labels)
-
+        results = self.get_results(self.test_scores, pred_pa, self.test_labels,
+                                   slidingWindow=self.cfg.TEST.SLIDING_WINDOW
+        )
         self.save_results(results)
         self.save_to_npy(**{
             "test_scores": self.test_scores,
@@ -128,7 +129,7 @@ class DetectorOracleAD:
         return pred
 
     @staticmethod
-    def get_results(scores, pred_pa, labels):
+    def get_results(scores, pred_pa, labels, slidingWindow):
         results = {}
 
         auroc = float(roc_auc_score(labels, scores))
@@ -143,6 +144,15 @@ class DetectorOracleAD:
         precision_best = precision[np.argmax(f1)]
         recall_best = recall[np.argmax(f1)]
         results.update({"Precision": precision_best, "Recall": recall_best, "F1": f1_best})
+
+        #논문의 VUS 계산 방법 사용(score 정규화)
+        scores_norm = MinMaxScaler(feature_range=(0, 1)).fit_transform(
+            scores.reshape(-1, 1)).ravel()
+        slidingWindow = get_median_anomaly_length(labels)  # SWaT: ~447
+        print(f"slidingWindow: {slidingWindow}")
+        print(f"labels sum: {labels.sum()}, len: {len(labels)}")
+        vus = get_vus_metrics(scores_norm, labels, slidingWindow=slidingWindow)
+        results.update({"VUS_PR": vus["VUS-PR"], "VUS_ROC": vus["VUS-ROC"]})
 
         if pred_pa is not None:
             tp = np.sum((pred_pa == 1) & (labels == 1))
@@ -159,7 +169,7 @@ class DetectorOracleAD:
         results_string = ", ".join([f"{metric}: {value:.04f}" for metric, value in results.items()])
         print(results_string)
 
-        with open(os.path.join(mkdir(self.cfg.RESULT_DIR) / "test.txt"), "w") as f:
+        with open(os.path.join(mkdir(self.cfg.RESULT_DIR) / "test_result.txt"), "w") as f:
             f.write(results_string)
 
     def save_to_npy(self, **kwargs):

@@ -19,7 +19,6 @@ def main():
 
     # build model
     model = build_model(cfg)
-
     # build trainer
     trainer = build_trainer(cfg, model)
 
