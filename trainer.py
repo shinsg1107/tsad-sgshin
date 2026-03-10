@@ -4,11 +4,13 @@
 # adapted from: https://github.com/huggingface/transformers/trainer.py
 import os
 import time
+from pathlib import Path
 from typing import Optional, Tuple, Mapping, Union, List
 
 import numpy as np
 import torch
 from torch.optim import Optimizer
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import models.optimizer as optim
@@ -18,29 +20,23 @@ from utils.meters import AverageMeter, ProgressMeter
 
 
 class Trainer:
-    def __init__(
-            self,
-            cfg,
-            model,
-            optimizer: Optional[Union[Optimizer, List[Optimizer]]] = None
-    ):
+    def __init__(self, cfg, model, optimizer=None):
         self.cfg = cfg
-        self.cfg_model = getattr(cfg, cfg.MODEL.NAME) 
+        self.cfg_model = getattr(cfg, cfg.MODEL.NAME)
         self.model = model
         self.optimizer = optimizer
+        self.writer = None  # train()에서 초기화
 
         self.metric_names = self.cfg_model.METRIC_NAMES
         self.loss_names = self.cfg_model.LOSS_NAMES
 
         self.cur_epoch = 0
         self.cur_iter = 0
-        
-        # Create the train and val (test) loaders.
+
         self.train_loader = get_train_dataloader(self.cfg)
         self.val_loader = get_val_dataloader(self.cfg)
         self.test_loader = get_test_dataloader(self.cfg)
 
-        # create optimizer
         if self.optimizer is None:
             self.create_optimizer()
 
@@ -49,25 +45,42 @@ class Trainer:
 
     def train(self):
         metric_best = self.cfg.TRAIN.METRIC_BEST
-        for cur_epoch in tqdm(range(self.cfg.SOLVER.START_EPOCH, self.cfg.SOLVER.MAX_EPOCH)):
-            self.train_epoch()
+        save_path = Path(self.cfg.RESULT_DIR)
 
-            # Evaluate the model on validation set.
+        for cur_epoch in tqdm(range(self.cfg.SOLVER.START_EPOCH, self.cfg.SOLVER.MAX_EPOCH)):
+            train_losses = self.train_epoch()
+
+            # train loss 로깅
+            if train_losses and self.writer:
+                for name, val in train_losses.items():
+                    self.writer.add_scalar(f"Train/{name}", val, cur_epoch)
+
+            # lr 로깅
+            current_lr = optim.get_epoch_lr(cur_epoch, self.cfg)
+            self.writer.add_scalar("Train/LR", current_lr, cur_epoch)
+
             if self._is_eval_epoch(cur_epoch):
-                tracking_meter = self.eval_epoch()
-                # check improvement
+                tracking_meter, val_losses = self.eval_epoch()
+
+                # val loss 로깅
+                if self.writer:
+                    self.writer.add_scalar(f"Val/{tracking_meter.name}",
+                                           tracking_meter.avg, cur_epoch)
+                    for name, val in val_losses.items():
+                        self.writer.add_scalar(f"Val/{name}", val, cur_epoch)
+
                 is_best = self._check_improvement(tracking_meter.avg, metric_best)
-                # Save a checkpoint on improvement.
                 if is_best:
-                    with open(mkdir(self.cfg.RESULT_DIR) / "best_result.txt", 'w') as f:
+                    with open(save_path / "best_result.txt", 'w') as f:
                         f.write(f"Val/{tracking_meter.name}: {tracking_meter.avg}\tEpoch: {self.cur_epoch}")
                     print(f"[current best] Val/{tracking_meter.name}: {tracking_meter.avg}\tEpoch: {self.cur_epoch}")
                     self.save_best_model()
                     metric_best = tracking_meter.avg
-                elif self.cfg.TRAIN.SAVE_EVERY_EVAL:
-                    self.save_best_model()
-                
+
             self.cur_epoch += 1
+
+        if self.writer:
+            self.writer.close()
 
     def _check_improvement(self, cur_metric, metric_best):
         if self.cfg.TRAIN.IS_METRIC_LOWER_BETTER:
@@ -76,7 +89,6 @@ class Trainer:
             return cur_metric > metric_best
 
     def train_epoch(self):
-        # set meters
         batch_time = AverageMeter('Time', ':6.3f')
         data_time = AverageMeter('Data', ':6.3f')
         metric_meters = self._get_metric_meters()
@@ -87,30 +99,24 @@ class Trainer:
             prefix="Epoch: [{}]".format(self.cur_epoch)
         )
 
-        # switch to train mode
         self.model.train()
-
         data_size = len(self.train_loader)
-
         start = time.time()
 
         for idx, inputs in enumerate(self.train_loader):
             cur_iter = idx + 1
             self.cur_iter = cur_iter
 
-            # measure data loading time
             data_time.update(time.time() - start)
 
-            # Update the learning rate.
             lr = optim.get_epoch_lr(self.cur_epoch + float(cur_iter) / data_size, self.cfg)
-            if isinstance(self.optimizer, tuple):  # USAD
+            if isinstance(self.optimizer, tuple):
                 [optim.set_lr(optimizer, lr) for optimizer in self.optimizer]
             else:
                 optim.set_lr(self.optimizer, lr)
 
             outputs = self.train_step(inputs)
 
-            # update metric and loss meters, and log to W&B
             batch_size = self._find_batch_size(inputs)
             self._update_metric_meters(metric_meters, outputs["metrics"], batch_size)
             self._update_loss_meters(loss_meters, outputs["losses"], batch_size)
@@ -118,9 +124,11 @@ class Trainer:
             if self._is_display_iter(cur_iter, len(self.train_loader)):
                 progress.display(cur_iter)
 
-            # measure elapsed time
             batch_time.update(time.time() - start)
             start = time.time()
+
+        # epoch 평균 loss 반환
+        return {meter.name: meter.avg for meter in loss_meters}
 
     def _get_metric_meters(self):
         return [AverageMeter(metric_name, ":.3f") for metric_name in self.metric_names]
@@ -128,7 +136,7 @@ class Trainer:
     def _get_loss_meters(self):
         return [AverageMeter(f"Loss {loss_name}", ":.4e") for loss_name in self.loss_names]
 
-    @staticmethod #self안넣음, 클래스 독립이지만 내부에 존재
+    @staticmethod
     def _update_metric_meters(metric_meters, metrics, batch_size):
         assert len(metric_meters) == len(metrics)
         for metric_meter, metric in zip(metric_meters, metrics):
@@ -141,23 +149,18 @@ class Trainer:
             loss_meter.update(loss.item(), batch_size)
 
     def train_step(self, inputs):
-        #! override for different methods
         inputs = prepare_inputs(inputs)
         outputs = self.model(inputs)
         loss = outputs["losses"][0]
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
-
         return outputs
 
     def _load_from_checkpoint(self):
         pass
 
     def _find_batch_size(self, inputs):
-        """
-        Find the first dimension of a tensor in a nested list/tuple/dict of tensors.
-        """
         if isinstance(inputs, (list, tuple)):
             for t in inputs:
                 result = self._find_batch_size(t)
@@ -174,11 +177,11 @@ class Trainer:
             return inputs.shape[0] if len(inputs.shape) >= 1 else None
 
     def _is_eval_epoch(self, cur_epoch):
-        return (cur_epoch + 1 == self.cfg.SOLVER.MAX_EPOCH) or (cur_epoch + 1) % self.cfg.TRAIN.EVAL_PERIOD == 0
+        return (cur_epoch + 1 == self.cfg.SOLVER.MAX_EPOCH) or \
+               (cur_epoch + 1) % self.cfg.TRAIN.EVAL_PERIOD == 0
 
     @torch.no_grad()
     def eval_epoch(self):
-        # set meters
         batch_time = AverageMeter('Time', ':6.3f')
         data_time = AverageMeter('Data', ':6.3f')
         metric_meters = self._get_metric_meters()
@@ -188,21 +191,17 @@ class Trainer:
             [batch_time, data_time, *metric_meters, *loss_meters],
             prefix="Validation epoch[{}]".format(self.cur_epoch)
         )
-        log_dict = {}
 
-        # switch to eval mode
         self.model.eval()
-
         start = time.time()
+
         for idx, inputs in enumerate(self.val_loader):
             cur_iter = idx + 1
             self.cur_iter = cur_iter
-            # measure data loading time
             data_time.update(time.time() - start)
 
             outputs = self.eval_step(inputs)
 
-            # update metric and loss meters, and log to W&B
             batch_size = self._find_batch_size(inputs)
             self._update_metric_meters(metric_meters, outputs["metrics"], batch_size)
             self._update_loss_meters(loss_meters, outputs["losses"], batch_size)
@@ -210,27 +209,18 @@ class Trainer:
             if self._is_display_iter(cur_iter, len(self.val_loader)):
                 progress.display(cur_iter)
 
-            # measure elapsed time
             batch_time.update(time.time() - start)
             start = time.time()
 
-        log_dict.update({
-            f"Val/{metric_meter.name}": metric_meter.avg for metric_meter in metric_meters
-        })
-        log_dict.update({
-            f"Val/{loss_meter.name}": loss_meter.avg for loss_meter in loss_meters
-        })
-
-        # track the best model based on the first metric
         tracking_meter = metric_meters[0]
+        val_losses = {meter.name: meter.avg for meter in loss_meters}
 
-        return tracking_meter
+        return tracking_meter, val_losses  # ← tuple로 반환
 
     @torch.no_grad()
     def eval_step(self, inputs):
         inputs = prepare_inputs(inputs)
         outputs = self.model(inputs)
-
         return outputs
 
     def _is_display_iter(self, cur_iter, loader_len):
@@ -252,17 +242,13 @@ class Trainer:
         if os.path.isfile(model_path):
             print(f"Loading checkpoint from {model_path}")
             checkpoint = torch.load(model_path, map_location="cpu")
-
             state_dict = checkpoint['model_state']
             msg = self.model.load_state_dict(state_dict, strict=True)
             assert set(msg.missing_keys) == set()
-
             print(f"Loaded pre-trained model from {model_path}")
         else:
             print("=> no checkpoint found at '{}'".format(model_path))
-
         return self.model
-
 
 def build_trainer(cfg, model):
     trainer_classes = {

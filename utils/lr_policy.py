@@ -24,6 +24,8 @@ def get_lr_at_epoch(cfg, cur_epoch):
         lr = cur_epoch * alpha + lr_start
     return lr
 
+def lr_func_fixed(cfg, cur_epoch):
+    return cfg.SOLVER.BASE_LR
 
 def lr_func_cosine(cfg, cur_epoch):
     """

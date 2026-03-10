@@ -1,18 +1,16 @@
 import os
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from trainer import Trainer, prepare_inputs
+from models.oracle.detector import DetectorOracleAD
+
 
 class OracleADTrainer(Trainer):
-    """
-    OracleAD trainer that:
-      1) builds SLS each epoch from c_star (mean D over all train windows in the epoch)
-      2) uses deviation loss from START_EPOCH onward (when SLS is available)
-      3) computes pred/recon losses in the trainer from model outputs:
-           pred_loss  = MSE(x_hat_next, y_next)
-           recon_loss = MSE(x_hat_past, x_past_true)
-    """
 
     def __init__(self, cfg, model):
         super().__init__(cfg, model)
@@ -20,13 +18,9 @@ class OracleADTrainer(Trainer):
         self.start_sls_epoch = int(self.cfg.ORACLEAD.SLS.START_EPOCH)
         self.lambda_recon = float(self.cfg.ORACLEAD.LAMBDA_RECON)
         self.lambda_dev = float(self.cfg.ORACLEAD.LAMBDA_DEV)
+        self.use_squared_l2 = bool(getattr(self.cfg.ORACLEAD.SLS, "USE_SQUARED_L2", False))
 
-        # If your paper uses L2 (not squared) for D_ij, set this False.
-        # Your current SLS builder uses squared L2 distance (||a-b||^2).
-        self.use_squared_l2 = bool(getattr(self.cfg.ORACLEAD.SLS, "USE_SQUARED_L2", True))
-
-        # SLS state (reference template)
-        self.sls = None  # [N,N] on CPU; moved to GPU when used
+        self.sls = None
         self._reset_sls_accum()
 
         sls_path = os.path.join(self.cfg.TRAIN.CHECKPOINT_DIR, "sls_latest.pt")
@@ -34,49 +28,91 @@ class OracleADTrainer(Trainer):
             self.sls = torch.load(sls_path, map_location="cpu")
             print(f"[OracleADTrainer] Loaded SLS from {sls_path} (shape={tuple(self.sls.shape)})")
 
+    # ------------------------------------------------------------------ #
+    #  train() override: TensorBoard + eval period마다 test 실행           #
+    # ------------------------------------------------------------------ #
+    def train(self):
+        metric_best = self.cfg.TRAIN.METRIC_BEST
+        save_path = Path(self.cfg.RESULT_DIR)
+
+        tb_dir = save_path / "tensorboard"
+        tb_dir.mkdir(parents=True, exist_ok=True)
+        self.writer = SummaryWriter(log_dir=str(tb_dir))
+        print(f"TensorBoard logs: {tb_dir}")
+
+        for cur_epoch in tqdm(range(self.cfg.SOLVER.START_EPOCH, self.cfg.SOLVER.MAX_EPOCH)):
+            train_losses = self.train_epoch()
+
+            # train loss 로깅
+            if train_losses and self.writer:
+                for name, val in train_losses.items():
+                    self.writer.add_scalar(f"Train/{name}", val, cur_epoch)
+
+            if self._is_eval_epoch(cur_epoch):
+                tracking_meter, val_losses = self.eval_epoch()
+
+                # val loss 로깅
+                if self.writer:
+                    self.writer.add_scalar(f"Val/{tracking_meter.name}",
+                                           tracking_meter.avg, cur_epoch)
+                    for name, val in val_losses.items():
+                        self.writer.add_scalar(f"Val/{name}", val, cur_epoch)
+
+                is_best = self._check_improvement(tracking_meter.avg, metric_best)
+                if is_best:
+                    with open(save_path / "best_result.txt", 'w') as f:
+                        f.write(f"Val/{tracking_meter.name}: {tracking_meter.avg}\tEpoch: {self.cur_epoch}")
+                    print(f"[current best] Val/{tracking_meter.name}: {tracking_meter.avg}\tEpoch: {self.cur_epoch}")
+                    self.save_best_model()
+                    metric_best = tracking_meter.avg
+
+                # eval period마다 test 실행 및 로깅
+                self._log_test_metrics(cur_epoch)
+
+            self.cur_epoch += 1
+
+        if self.writer:
+            self.writer.close()
+
+    def _log_test_metrics(self, cur_epoch):
+        print(f"[Epoch {cur_epoch}] Running test...")
+        predictor = DetectorOracleAD(self.cfg, self.model)
+        predictor.predict()
+
+        if self.writer and hasattr(predictor, 'last_results'):
+            for name, val in predictor.last_results.items():
+                self.writer.add_scalar(f"Test/{name}", float(val), cur_epoch)
+            print(f"[Epoch {cur_epoch}] Test metrics logged to TensorBoard")
+
+    # ------------------------------------------------------------------ #
+    #  SLS 관련                                                            #
+    # ------------------------------------------------------------------ #
     def _reset_sls_accum(self):
-        self.sls_sum = None   # [N,N]
-        self.sls_count = 0    # total windows M
+        self.sls_sum = None
+        self.sls_count = 0
 
     @staticmethod
     def _pairwise_sq_l2(c_star: torch.Tensor) -> torch.Tensor:
-        """
-        c_star: [B,N,D]
-        return: [B,N,N] with squared L2 distances
-        """
-        x2 = (c_star * c_star).sum(dim=-1, keepdim=True)          # [B,N,1]
-        prod = torch.matmul(c_star, c_star.transpose(1, 2))       # [B,N,N]
+        x2 = (c_star * c_star).sum(dim=-1, keepdim=True)
+        prod = torch.matmul(c_star, c_star.transpose(1, 2))
         dist2 = x2 + x2.transpose(1, 2) - 2.0 * prod
         return dist2.clamp_min_(0.0)
 
     def _pairwise_l2(self, c_star: torch.Tensor) -> torch.Tensor:
-        """
-        c_star: [B,N,D]
-        return: [B,N,N] with L2 distances (not squared)
-        """
-        dist2 = self._pairwise_sq_l2(c_star)
-        return (dist2 + 1e-12).sqrt()
+        return (self._pairwise_sq_l2(c_star) + 1e-12).sqrt()
 
     def _accumulate_sls(self, D_batch: torch.Tensor):
-        """
-        D_batch: [B,N,N]
-        Accumulate sum over batch to build epoch mean SLS.
-        """
         with torch.no_grad():
-            D_sum = D_batch.detach().sum(dim=0)  # [N,N]
+            D_sum = D_batch.detach().sum(dim=0)
             self.sls_sum = D_sum if self.sls_sum is None else (self.sls_sum + D_sum)
             self.sls_count += int(D_batch.size(0))
 
     def _finalize_and_save_sls(self):
-        """
-        At end of epoch: SLS = (1/M) sum_k D(k)
-        Save and set self.sls for next epoch.
-        """
         if self.sls_sum is None or self.sls_count == 0:
             print("[OracleADTrainer] Warning: No D accumulated. SLS not updated.")
             return
 
-        sls = (self.sls_sum / float(self.sls_count)).cpu()  # [N,N] on CPU
+        sls = (self.sls_sum / float(self.sls_count)).cpu()
         self.sls = sls
 
         if bool(getattr(self.cfg.ORACLEAD.SLS, "SAVE_EVERY_EPOCH", True)):
@@ -85,41 +121,33 @@ class OracleADTrainer(Trainer):
             torch.save(sls, os.path.join(ckpt_dir, f"sls_epoch_{self.cur_epoch}.pt"))
             torch.save(sls, os.path.join(ckpt_dir, "sls_latest.pt"))
 
+    # ------------------------------------------------------------------ #
+    #  train / eval                                                        #
+    # ------------------------------------------------------------------ #
     def _unwrap_x(self, inputs):
         inputs = prepare_inputs(inputs)
         if isinstance(inputs, (tuple, list)):
-            return inputs[0]  # (x, label) 형태면 x만
+            return inputs[0]
         return inputs
 
     def train_epoch(self):
-        # epoch 시작: 이번 epoch에서 dev loss를 쓸지 결정
         self.use_dev_loss = (self.cur_epoch >= self.start_sls_epoch) and (self.sls is not None)
-
         self._reset_sls_accum()
-        super().train_epoch()
+        train_losses = super().train_epoch()
         self._finalize_and_save_sls()
+        return train_losses
 
     def _compute_pred_recon_loss(self, out: dict):
-        """
-        out keys expected:
-          x_hat_next: [B,N] (or [B,N,1] -> we squeeze)
-          y_next:     [B,N]
-          x_hat_past: [B,N,T] (or [B,N,T,1] -> we squeeze)
-          x_past_true:[B,N,T]
-        """
         x_hat_next = out["x_hat_next"]
         y_next = out["y_next"]
         if x_hat_next.dim() == 3 and x_hat_next.size(-1) == 1:
-            x_hat_next = x_hat_next.squeeze(-1)  # [B,N]
+            x_hat_next = x_hat_next.squeeze(-1)
 
         x_hat_past = out["x_hat_past"]
         x_past_true = out["x_past_true"]
         if x_hat_past.dim() == 4 and x_hat_past.size(-1) == 1:
-            x_hat_past = x_hat_past.squeeze(-1)  # [B,N,T]
+            x_hat_past = x_hat_past.squeeze(-1)
 
-        # MSE (paper text uses L2 norms; MSE is fine up to scaling. If you want pure L2, change reduction.)
-        # pred_loss = F.mse_loss(x_hat_next, y_next)
-        # recon_loss = F.mse_loss(x_hat_past, x_past_true)
         pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
         recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
         return pred_loss, recon_loss, x_hat_next, x_hat_past
@@ -128,21 +156,15 @@ class OracleADTrainer(Trainer):
         x = self._unwrap_x(inputs)
         out = self.model(x)
 
-        # 1) compute losses from model outputs
         pred_loss, recon_loss, _, _ = self._compute_pred_recon_loss(out)
-        c_star = out["c_star"]  # [B,N,D]
+        c_star = out["c_star"]
 
-        # 2) build dissimilarity matrix D(k) and accumulate SLS (always)
-        if self.use_squared_l2:
-            D_batch = self._pairwise_sq_l2(c_star)  # [B,N,N]
-        else:
-            D_batch = self._pairwise_l2(c_star)     # [B,N,N]
+        D_batch = self._pairwise_sq_l2(c_star) if self.use_squared_l2 else self._pairwise_l2(c_star)
         self._accumulate_sls(D_batch)
 
-        # 3) deviation loss
         if self.use_dev_loss:
-            sls = self.sls.to(D_batch.device, dtype=D_batch.dtype)  # [N,N]
-            diff = D_batch - sls[None, :, :]                        # [B,N,N]
+            sls = self.sls.to(D_batch.device, dtype=D_batch.dtype)
+            diff = D_batch - sls[None, :, :]
             N = diff.size(1)
             dev_loss = (diff.pow(2).sum(dim=(1, 2)) / float(N * N)).mean()
             total = pred_loss + self.lambda_recon * recon_loss + self.lambda_dev * dev_loss
@@ -150,7 +172,6 @@ class OracleADTrainer(Trainer):
             dev_loss = pred_loss.new_zeros(())
             total = pred_loss + self.lambda_recon * recon_loss
 
-        # 4) optimize
         self.optimizer.zero_grad()
         total.backward()
         if self.cfg.SOLVER.GRADIENT_CLIP:
@@ -170,10 +191,7 @@ class OracleADTrainer(Trainer):
         pred_loss, recon_loss, _, _ = self._compute_pred_recon_loss(out)
         c_star = out["c_star"]
 
-        if self.use_squared_l2:
-            D_batch = self._pairwise_sq_l2(c_star)
-        else:
-            D_batch = self._pairwise_l2(c_star)
+        D_batch = self._pairwise_sq_l2(c_star) if self.use_squared_l2 else self._pairwise_l2(c_star)
 
         use_dev = (self.cur_epoch >= self.start_sls_epoch) and (self.sls is not None)
         if use_dev:

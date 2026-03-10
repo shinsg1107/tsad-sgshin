@@ -49,17 +49,31 @@ def load_config(args):
         "SWaT": 51,
         "WADI": 123,
     }
+
+    sliding_windows = {
+    "PSM": 5,
+    "SMD": 11,
+    "SWaT": 447,
+    "WADI": 100,  #wadi, msl은 논문에 없음
+    "MSL": 100,
+    }
+
     if cfg.DATA.NAME == 'SWaT':
         cfg.DATA.N_VAR = valid_datasets["SWaT"]
+        cfg.TEST.SLIDING_WINDOW = sliding_windows["SWaT"]
     elif cfg.DATA.NAME == 'WADI':
         cfg.DATA.N_VAR = valid_datasets["WADI"]
         cfg.SCORER.TYPE = "cos"
+        cfg.TEST.SLIDING_WINDOW = sliding_windows["WADI"]
     elif "SMD" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["SMD"]
+        cfg.TEST.SLIDING_WINDOW = sliding_windows["SMD"]
     elif "MSL" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["MSL"]
+        cfg.TEST.SLIDING_WINDOW = sliding_windows["MSL"]
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
+        cfg.TEST.SLIDING_WINDOW = sliding_windows.get(cfg.DATA.NAME, 100)
     
     date = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     cfg.TRAIN.CHECKPOINT_DIR = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.DATA.NAME, date)

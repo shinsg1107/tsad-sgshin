@@ -29,7 +29,6 @@ class LSTMEncoder(nn.Module):
                 bidirectional=self.bidirectional,
                 batch_first=True,  # [B, T, C]
             )
-
         if self.shared:
             self.lstm = make_lstm()
         else:
@@ -116,7 +115,7 @@ class LSTMDecoder(nn.Module):
         self.T = int(getattr(self.cfg_dec, "PAST_LEN", cfg.DATA.WIN_SIZE - 1))
 
         # LSTM input size is D because we feed c* (context) each step
-        lstm_in = self.dim
+        lstm_in = self.out_dim
         lstm_out = self.hidden_dim * (2 if self.bidirectional else 1)
 
         def make_lstm():
@@ -174,7 +173,7 @@ class LSTMDecoder(nn.Module):
             h0 = ci.unsqueeze(0).expand(self.num_layers, B, self.hidden_dim).contiguous()  # [num_layers, B, H]
             c0 = torch.zeros_like(h0)
 
-            h_seq_i, (h_n, _) = self.lstm_list[i](dec_in_i)          # [B, T, lstm_out]
+            h_seq_i, (h_n, _) = self.lstm_list[i](dec_in_i, (h0, c0))          # [B, T, lstm_out]
             recon_i = self.head_recon_list[i](h_seq_i)               # [B, T, out_dim]
             next_i = self.head_next_list[i](h_seq_i[:, -1, :])       # [B, out_dim]
 

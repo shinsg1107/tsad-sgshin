@@ -7,6 +7,10 @@ class ScorerOracleAD:
         self.model = model.eval()
         sls_path = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, "sls_latest.pt")
         self.sls = torch.load(sls_path, map_location="cpu") if os.path.isfile(sls_path) else None
+        print(f"SLS path: {sls_path}")
+        print(f"SLS loaded: {self.sls is not None}")
+        if self.sls is not None:
+            print(f"SLS shape: {self.sls.shape}, mean: {self.sls.mean():.4f}")
 
     @staticmethod
     def pairwise_sq_l2(c_star: torch.Tensor) -> torch.Tensor:

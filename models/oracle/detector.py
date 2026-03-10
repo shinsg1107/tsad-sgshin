@@ -12,7 +12,7 @@ from datasets.loader import get_train_dataloader, get_val_dataloader, get_test_d
 from trainer import prepare_inputs
 from utils.misc import mkdir
 from models.oracle.score_oracle import ScorerOracleAD
-from models.oracle.basic_metrics import get_vus_metrics, get_median_anomaly_length
+from models.oracle.basic_metrics import get_vus_metrics
 
 class DetectorOracleAD:
     def __init__(self, cfg, model):
@@ -62,6 +62,7 @@ class DetectorOracleAD:
         results = self.get_results(self.test_scores, pred_pa, self.test_labels,
                                    slidingWindow=self.cfg.TEST.SLIDING_WINDOW
         )
+        self.last_results = results
         self.save_results(results)
         self.save_to_npy(**{
             "test_scores": self.test_scores,
@@ -148,7 +149,6 @@ class DetectorOracleAD:
         #논문의 VUS 계산 방법 사용(score 정규화)
         scores_norm = MinMaxScaler(feature_range=(0, 1)).fit_transform(
             scores.reshape(-1, 1)).ravel()
-        slidingWindow = get_median_anomaly_length(labels)  # SWaT: ~447
         print(f"slidingWindow: {slidingWindow}")
         print(f"labels sum: {labels.sum()}, len: {len(labels)}")
         vus = get_vus_metrics(scores_norm, labels, slidingWindow=slidingWindow)

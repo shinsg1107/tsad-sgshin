@@ -70,3 +70,6 @@ def get_param_groups(model):
     param_groups = [p for n, p in model.named_parameters() if p.requires_grad]
 
     return param_groups
+
+def lr_func_fixed(cfg, cur_epoch):
+    return cfg.SOLVER.BASE_LR
