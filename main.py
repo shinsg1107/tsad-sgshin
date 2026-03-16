@@ -14,20 +14,16 @@ def main():
     with open(mkdir(cfg.RESULT_DIR) / 'config.txt', 'w') as f:
         f.write(cfg.dump())
 
-    # set random seed
+    # random seed 5회 평균 점수 계산으로 수정
     set_seeds(cfg.SEED)
 
     # build model
     model = build_model(cfg)
+
     # build trainer
     trainer = build_trainer(cfg, model)
+    trainer.train()
 
-    if cfg.TRAIN.ENABLE:
-        trainer.train()
-    if cfg.TEST.ENABLE:
-        model = trainer.load_best_model()
-        predictor = DetectorOracleAD(cfg, model)
-        predictor.predict()
-            
+
 if __name__ == '__main__':
     main()

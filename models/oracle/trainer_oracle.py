@@ -28,6 +28,8 @@ class OracleADTrainer(Trainer):
             self.sls = torch.load(sls_path, map_location="cpu")
             print(f"[OracleADTrainer] Loaded SLS from {sls_path} (shape={tuple(self.sls.shape)})")
 
+        self.history = []
+
     # ------------------------------------------------------------------ #
     #  train() override: TensorBoard + eval period마다 test 실행           #
     # ------------------------------------------------------------------ #
@@ -81,10 +83,11 @@ class OracleADTrainer(Trainer):
 
             self.cur_epoch += 1
 
+        self._save_history(save_path)
         if self.writer:
             self.writer.close()
 
-    def _log_test_metrics(self, cur_epoch):
+    def _log_test_metrics(self, cur_epoch, train_losses=None, val_losses=None):
         print(f"[Epoch {cur_epoch}] Running test...")
         predictor = DetectorOracleAD(self.cfg, self.model)
         predictor.predict()
@@ -93,6 +96,31 @@ class OracleADTrainer(Trainer):
             for name, val in predictor.last_results.items():
                 self.writer.add_scalar(f"Test/{name}", float(val), cur_epoch)
             print(f"[Epoch {cur_epoch}] Test metrics logged to TensorBoard")
+
+        record = {
+            'Dataset': self.cfg.DATA.NAME,
+            'Epoch': cur_epoch,
+            'Seed': self.cfg.SEED,
+        }
+        if train_losses:
+            for name, val in train_losses.items():
+                record[f"Train/{name}"] = val
+        if val_losses:
+            for name, val in val_losses.items():
+                record[f"Val/{name}"] = val
+        if hasattr(predictor, 'last_results'):
+            for name, val in predictor.last_results.items():
+                record[f"Test/{name}"] = float(val)
+        self.history.append(record)
+
+    def _save_history(self, save_path):
+        if not self.history:
+            return
+        import pandas as pd
+        df = pd.DataFrame(self.history)
+        csv_path = save_path / "training_history.csv"
+        df.to_csv(csv_path, index=False)
+        print(f"Training history saved to {csv_path}")
 
     # ------------------------------------------------------------------ #
     #  SLS 관련                                                            #
@@ -159,7 +187,7 @@ class OracleADTrainer(Trainer):
             x_hat_past = x_hat_past.squeeze(-1)
 
         pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
-        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
+        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=-1).sqrt().mean() #논문형태로(변수별 L2 norm)
         return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):

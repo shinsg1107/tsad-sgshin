@@ -34,7 +34,11 @@ class Trainer:
         self.cur_iter = 0
 
         self.train_loader = get_train_dataloader(self.cfg)
-        self.val_loader = get_val_dataloader(self.cfg)
+        eval_enable = getattr(cfg.TRAIN, "EVAL_ENABLE", False)
+        if eval_enable:
+            self.val_loader = get_val_dataloader(self.cfg)
+        else:
+            self.val_loader = None
         self.test_loader = get_test_dataloader(self.cfg)
 
         if self.optimizer is None:

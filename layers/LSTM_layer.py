@@ -78,108 +78,168 @@ class LSTMEncoder(nn.Module):
 
         return h_seq, h_last
     
+# class LSTMDecoder(nn.Module):
+#     def __init__(self, cfg):
+#         super().__init__()
+#         self.cfg = cfg
+#         self.cfg_dec = cfg.ORACLEAD.DECODER
+
+#         self.n_vars = int(cfg.DATA.N_VAR)
+#         self.dim = int(self.cfg_dec.DIM)                 # D (must match c* dim)
+#         self.hidden_dim = int(self.cfg_dec.HIDDEN_DIM)   # decoder hidden
+#         self.num_layers = int(getattr(self.cfg_dec, "NUM_LAYERS", 1))
+#         self.dropout = float(getattr(self.cfg_dec, "DROPOUT", 0.0))
+#         self.bias = bool(getattr(self.cfg_dec, "BIAS", True))
+#         self.bidirectional = bool(getattr(self.cfg_dec, "BIDIRECTIONAL", False))
+#         self.shared = bool(getattr(self.cfg_dec, "SHARED", False))
+
+#         # output dim per variable (usually 1 for a single sensor value)
+#         self.out_dim = int(getattr(self.cfg_dec, "OUT_DIM", 1))
+
+#         # past length T = (L-1)
+#         # OracleAD paper uses window length L, and reconstructs 1..L-1 and predicts L.
+#         self.T = int(getattr(self.cfg_dec, "PAST_LEN", cfg.DATA.WIN_SIZE - 1))
+
+#         # LSTM input size is D because we feed c* (context) each step
+#         lstm_in = self.out_dim
+#         lstm_out = self.hidden_dim * (2 if self.bidirectional else 1)
+
+#         def make_lstm():
+#             return nn.LSTM(
+#                 input_size=lstm_in,
+#                 hidden_size=self.hidden_dim,
+#                 num_layers=self.num_layers,
+#                 batch_first=True,
+#                 dropout=self.dropout if self.num_layers > 1 else 0.0,
+#                 bias=self.bias,
+#                 bidirectional=self.bidirectional,
+#             )
+
+#         if self.shared:
+#             self.lstm = make_lstm()
+#             self.head_recon = nn.Linear(lstm_out, self.out_dim)
+#             self.head_next = nn.Linear(lstm_out, self.out_dim)
+#         else:
+#             self.lstm_list = nn.ModuleList([make_lstm() for _ in range(self.n_vars)])
+#             self.head_recon_list = nn.ModuleList([nn.Linear(lstm_out, self.out_dim) for _ in range(self.n_vars)])
+#             self.head_next_list = nn.ModuleList([nn.Linear(lstm_out, self.out_dim) for _ in range(self.n_vars)])
+
+#     def forward(self, c_star: torch.Tensor):
+#         """
+#         c_star: [B, N, D]
+#         """
+#         B, N, D = c_star.shape
+#         assert N == self.n_vars, f"Expected N={self.n_vars}, got {N}"
+#         assert D == self.dim, f"Expected D={self.dim}, got {D}"
+
+#         # We drive the decoder LSTM with repeated context vector across time:
+#         # dec_in_i: [B, T, D] where each time step input is c_i*
+#         # This is a common way to decode a sequence from a fixed context.
+#         if self.shared:
+#             dec_in = c_star.unsqueeze(2).expand(B, N, self.T, D)      # [B, N, T, D]
+#             dec_in = dec_in.reshape(B * N, self.T, D)                # [B*N, T, D]
+
+#             h_seq, (h_n, _) = self.lstm(dec_in)                      # h_seq: [B*N, T, lstm_out]
+#             recon = self.head_recon(h_seq)                           # [B*N, T, out_dim]
+#             next_ = self.head_next(h_seq[:, -1, :])                  # [B*N, out_dim]
+
+#             x_hat_past = recon.reshape(B, N, self.T, self.out_dim)   # [B, N, T, out_dim]
+#             x_hat_next = next_.reshape(B, N, self.out_dim)           # [B, N, out_dim]
+#             return x_hat_past, x_hat_next
+
+#         # Per-variable decoders (paper-faithful)
+#         x_hat_past_list = []
+#         x_hat_next_list = []
+
+#         for i in range(N):
+#             ci = c_star[:, i, :]                                     # [B, D]
+#             dec_in_i = torch.zeros(B, self.T, 1, device=ci.device, dtype=ci.dtype)  # [B, T, 1]
+
+#             # c* as initial hidden state (projection 필요 - D != hidden_dim일 수 있음)
+#             h0 = ci.unsqueeze(0).expand(self.num_layers, B, self.hidden_dim).contiguous()  # [num_layers, B, H]
+#             c0 = torch.zeros_like(h0)
+
+#             h_seq_i, (h_n, _) = self.lstm_list[i](dec_in_i, (h0, c0))          # [B, T, lstm_out]
+#             recon_i = self.head_recon_list[i](h_seq_i)               # [B, T, out_dim]
+#             next_i = self.head_next_list[i](h_seq_i[:, -1, :])       # [B, out_dim]
+
+#             x_hat_past_list.append(recon_i.unsqueeze(1))             # [B, 1, T, out_dim]
+#             x_hat_next_list.append(next_i.unsqueeze(1))              # [B, 1, out_dim]
+
+#         x_hat_past = torch.cat(x_hat_past_list, dim=1)               # [B, N, T, out_dim]
+#         x_hat_next = torch.cat(x_hat_next_list, dim=1)               # [B, N, out_dim]
+#         return x_hat_past, x_hat_next
+
 class LSTMDecoder(nn.Module):
-    """
-    OracleAD-style decoder(s):
-      Dec_i(c_i*) -> (xhat_i^{1:L-1}, xhat_i^L)
-
-    Input:
-      c_star: [B, N, D]
-    Output:
-      x_hat_past: [B, N, T, C_out]   (reconstruct past window)
-      x_hat_next: [B, N, C_out]      (predict next value)
-
-    Notes:
-      - T should match (L-1) = cfg.ORACLE.WIN_SIZE-1 or cfg.DATA.WIN_SIZE-1 depending on your setup.
-      - Uses an LSTM that is driven by repeated context vector c* across time.
-    """
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
         self.cfg_dec = cfg.ORACLEAD.DECODER
 
-        self.n_vars = int(cfg.DATA.N_VAR)
-        self.dim = int(self.cfg_dec.DIM)                 # D (must match c* dim)
-        self.hidden_dim = int(self.cfg_dec.HIDDEN_DIM)   # decoder hidden
-        self.num_layers = int(getattr(self.cfg_dec, "NUM_LAYERS", 1))
-        self.dropout = float(getattr(self.cfg_dec, "DROPOUT", 0.0))
-        self.bias = bool(getattr(self.cfg_dec, "BIAS", True))
-        self.bidirectional = bool(getattr(self.cfg_dec, "BIDIRECTIONAL", False))
-        self.shared = bool(getattr(self.cfg_dec, "SHARED", False))
-
-        # output dim per variable (usually 1 for a single sensor value)
-        self.out_dim = int(getattr(self.cfg_dec, "OUT_DIM", 1))
-
-        # past length T = (L-1)
-        # OracleAD paper uses window length L, and reconstructs 1..L-1 and predicts L.
-        self.T = int(getattr(self.cfg_dec, "PAST_LEN", cfg.DATA.WIN_SIZE - 1))
-
-        # LSTM input size is D because we feed c* (context) each step
-        lstm_in = self.out_dim
-        lstm_out = self.hidden_dim * (2 if self.bidirectional else 1)
+        self.n_vars    = int(cfg.DATA.N_VAR)
+        self.dim       = int(self.cfg_dec.DIM)
+        self.hidden_dim= int(self.cfg_dec.HIDDEN_DIM)
+        self.num_layers= int(getattr(self.cfg_dec, "NUM_LAYERS", 1))
+        self.dropout   = float(getattr(self.cfg_dec, "DROPOUT", 0.0))
+        self.bias      = bool(getattr(self.cfg_dec, "BIAS", True))
+        self.out_dim   = int(getattr(self.cfg_dec, "OUT_DIM", 1))
+        self.T         = int(getattr(self.cfg_dec, "PAST_LEN", cfg.DATA.WIN_SIZE - 1))
+        self.L         = self.T + 1  # full window length
 
         def make_lstm():
             return nn.LSTM(
-                input_size=lstm_in,
+                input_size=self.out_dim,
                 hidden_size=self.hidden_dim,
                 num_layers=self.num_layers,
                 batch_first=True,
                 dropout=self.dropout if self.num_layers > 1 else 0.0,
                 bias=self.bias,
-                bidirectional=self.bidirectional,
             )
 
-        if self.shared:
-            self.lstm = make_lstm()
-            self.head_recon = nn.Linear(lstm_out, self.out_dim)
-            self.head_next = nn.Linear(lstm_out, self.out_dim)
-        else:
-            self.lstm_list = nn.ModuleList([make_lstm() for _ in range(self.n_vars)])
-            self.head_recon_list = nn.ModuleList([nn.Linear(lstm_out, self.out_dim) for _ in range(self.n_vars)])
-            self.head_next_list = nn.ModuleList([nn.Linear(lstm_out, self.out_dim) for _ in range(self.n_vars)])
+        self.lstm_list   = nn.ModuleList([make_lstm() for _ in range(self.n_vars)])
+
+        # 학습 가능한 hidden/cell 초기화 projection
+        self.init_h_list = nn.ModuleList([
+            nn.Linear(self.dim, self.num_layers * self.hidden_dim)
+            for _ in range(self.n_vars)
+        ])
+        self.init_c_list = nn.ModuleList([
+            nn.Linear(self.dim, self.num_layers * self.hidden_dim)
+            for _ in range(self.n_vars)
+        ])
+
+        self.out_list = nn.ModuleList([
+            nn.Linear(self.hidden_dim, self.out_dim)
+            for _ in range(self.n_vars)
+        ])
 
     def forward(self, c_star: torch.Tensor):
-        """
-        c_star: [B, N, D]
-        """
         B, N, D = c_star.shape
-        assert N == self.n_vars, f"Expected N={self.n_vars}, got {N}"
-        assert D == self.dim, f"Expected D={self.dim}, got {D}"
+        assert N == self.n_vars
+        assert D == self.dim
 
-        # We drive the decoder LSTM with repeated context vector across time:
-        # dec_in_i: [B, T, D] where each time step input is c_i*
-        # This is a common way to decode a sequence from a fixed context.
-        if self.shared:
-            dec_in = c_star.unsqueeze(2).expand(B, N, self.T, D)      # [B, N, T, D]
-            dec_in = dec_in.reshape(B * N, self.T, D)                # [B*N, T, D]
-
-            h_seq, (h_n, _) = self.lstm(dec_in)                      # h_seq: [B*N, T, lstm_out]
-            recon = self.head_recon(h_seq)                           # [B*N, T, out_dim]
-            next_ = self.head_next(h_seq[:, -1, :])                  # [B*N, out_dim]
-
-            x_hat_past = recon.reshape(B, N, self.T, self.out_dim)   # [B, N, T, out_dim]
-            x_hat_next = next_.reshape(B, N, self.out_dim)           # [B, N, out_dim]
-            return x_hat_past, x_hat_next
-
-        # Per-variable decoders (paper-faithful)
         x_hat_past_list = []
         x_hat_next_list = []
 
         for i in range(N):
-            ci = c_star[:, i, :]                                     # [B, D]
-            dec_in_i = torch.zeros(B, self.T, 1, device=ci.device, dtype=ci.dtype)  # [B, T, 1]
+            ci = c_star[:, i, :]  # [B, D]
+            z = torch.zeros(B, self.L, self.out_dim, device=ci.device, dtype=ci.dtype)
 
-            # c* as initial hidden state (projection 필요 - D != hidden_dim일 수 있음)
-            h0 = ci.unsqueeze(0).expand(self.num_layers, B, self.hidden_dim).contiguous()  # [num_layers, B, H]
-            c0 = torch.zeros_like(h0)
+            # 학습 가능한 projection으로 hidden/cell 초기화
+            h0 = torch.tanh(self.init_h_list[i](ci)).view(self.num_layers, B, self.hidden_dim).contiguous()
+            c0 = torch.tanh(self.init_c_list[i](ci)).view(self.num_layers, B, self.hidden_dim).contiguous()
 
-            h_seq_i, (h_n, _) = self.lstm_list[i](dec_in_i, (h0, c0))          # [B, T, lstm_out]
-            recon_i = self.head_recon_list[i](h_seq_i)               # [B, T, out_dim]
-            next_i = self.head_next_list[i](h_seq_i[:, -1, :])       # [B, out_dim]
+            Y, _ = self.lstm_list[i](z, (h0, c0))  # [B, L, hidden_dim]
 
-            x_hat_past_list.append(recon_i.unsqueeze(1))             # [B, 1, T, out_dim]
-            x_hat_next_list.append(next_i.unsqueeze(1))              # [B, 1, out_dim]
+            # 단일 linear로 전체 출력
+            O = self.out_list[i](Y).squeeze(-1)     # [B, L]
 
-        x_hat_past = torch.cat(x_hat_past_list, dim=1)               # [B, N, T, out_dim]
-        x_hat_next = torch.cat(x_hat_next_list, dim=1)               # [B, N, out_dim]
+            recon_i = O[:, :self.T]                 # [B, T] = [B, L-1]
+            next_i  = O[:, self.T]                  # [B]
+
+            x_hat_past_list.append(recon_i.unsqueeze(1))        # [B, 1, T]
+            x_hat_next_list.append(next_i.unsqueeze(1).unsqueeze(-1))  # [B, 1, 1]
+
+        x_hat_past = torch.cat(x_hat_past_list, dim=1).unsqueeze(-1)  # [B, N, T, 1]
+        x_hat_next = torch.cat(x_hat_next_list, dim=1)                # [B, N, 1]
         return x_hat_past, x_hat_next

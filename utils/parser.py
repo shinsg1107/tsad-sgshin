@@ -61,16 +61,15 @@ def load_config(args):
     if cfg.DATA.NAME == 'SWaT':
         cfg.DATA.N_VAR = valid_datasets["SWaT"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SWaT"]
-    elif cfg.DATA.NAME == 'WADI':
-        cfg.DATA.N_VAR = valid_datasets["WADI"]
-        cfg.SCORER.TYPE = "cos"
-        cfg.TEST.SLIDING_WINDOW = sliding_windows["WADI"]
+        cfg.SOLVER.MAX_EPOCH = 80
     elif "SMD" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["SMD"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SMD"]
-    elif "MSL" in cfg.DATA.NAME:
-        cfg.DATA.N_VAR = valid_datasets["MSL"]
-        cfg.TEST.SLIDING_WINDOW = sliding_windows["MSL"]
+        cfg.SOLVER.MAX_EPOCH = 50
+    elif "PSM" in cfg.DATA.NAME:
+        cfg.DATA.N_VAR = valid_datasets["PSM"]
+        cfg.TEST.SLIDING_WINDOW = sliding_windows["PSM"]
+        cfg.SOLVER.MAX_EPOCH = 20
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
         cfg.TEST.SLIDING_WINDOW = sliding_windows.get(cfg.DATA.NAME, 100)

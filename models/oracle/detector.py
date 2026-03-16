@@ -4,26 +4,22 @@ from copy import deepcopy
 import numpy as np
 import torch
 from tqdm import tqdm
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
-from sklearn.preprocessing import MinMaxScaler
 
-from threshold import Thresholder
-from datasets.loader import get_train_dataloader, get_val_dataloader, get_test_dataloader
+from datasets.loader import get_train_dataloader, get_test_dataloader
 from trainer import prepare_inputs
 from utils.misc import mkdir
 from models.oracle.score_oracle import ScorerOracleAD
 from evaluation.annomaly_metrics import get_metrics
-from evaluation.basic_metrics import get_median_anomaly_length
+
+
 class DetectorOracleAD:
     def __init__(self, cfg, model):
         self.cfg = cfg.clone()
 
-        # scoring용: stride=1, shuffle off, drop_last off 권장
+        # scoring용: stride=1, shuffle off, drop_last off
         self.cfg.DATA.TRAIN_STEP = 1
         self.cfg.TRAIN.SHUFFLE = False
         self.cfg.TRAIN.DROP_LAST = False
-        self.cfg.VAL.SHUFFLE = False
-        self.cfg.VAL.DROP_LAST = False
         self.cfg.TEST.SHUFFLE = False
         self.cfg.TEST.DROP_LAST = False
 
@@ -35,41 +31,59 @@ class DetectorOracleAD:
         self.scorer = ScorerOracleAD(self.cfg, self.model)
 
         self.train_loader = get_train_dataloader(self.cfg)
-        self.val_loader = get_val_dataloader(self.cfg)
         self.test_loader = get_test_dataloader(self.cfg)
 
     @torch.no_grad()
     def predict(self):
         self.model.eval()
 
-        self.train_scores = self._get_train_scores()
         self.test_scores = self._get_test_scores()
         self.test_labels = self._get_test_labels()
 
         assert len(self.test_scores) == len(self.test_labels), \
             f"score/label length mismatch: {len(self.test_scores)} vs {len(self.test_labels)}"
 
-        thresholder = Thresholder(self.cfg, self.test_scores, self.test_labels, self.train_scores)
-        self.threshold = thresholder.threshold
-
-        pred = (self.test_scores > self.threshold).astype(int)
+        # 논문 D.3: N=200 uniform bins에서 best F1 threshold
+        self.threshold = self._find_best_threshold(self.test_scores, self.test_labels)
+        pred = (self.test_scores >= self.threshold).astype(int)
 
         if self.cfg.TEST.POINT_ADJUST:
             pred_pa = self.point_adjust(pred, self.test_labels)
         else:
             pred_pa = None
 
-        results = self.get_results(self.test_scores, pred_pa, self.test_labels,
-                                   slidingWindow=self.cfg.TEST.SLIDING_WINDOW
+        results = self.get_results(
+            self.test_scores, pred_pa, self.test_labels,
+            slidingWindow=self.cfg.TEST.SLIDING_WINDOW
         )
         self.last_results = results
         self.save_results(results)
         self.save_to_npy(**{
             "test_scores": self.test_scores,
             "test_labels": self.test_labels,
-            "train_scores": self.train_scores,
-            "threshold": self.threshold
+            "threshold": np.array(self.threshold)
         })
+
+    @staticmethod
+    def _find_best_threshold(scores: np.ndarray, labels: np.ndarray, N: int = 200) -> float:
+        """논문 D.3: N=200 uniform bins에서 best F1 threshold 탐색"""
+        s_min, s_max = scores.min(), scores.max()
+        candidates = [s_min + i / (N - 1) * (s_max - s_min) for i in range(N)]
+
+        best_f1, best_thr = -1.0, candidates[0]
+        for tau in candidates:
+            preds = (scores >= tau).astype(int)
+            tp = np.sum((preds == 1) & (labels == 1))
+            fp = np.sum((preds == 1) & (labels == 0))
+            fn = np.sum((preds == 0) & (labels == 1))
+            p  = tp / (tp + fp + 1e-12)
+            r  = tp / (tp + fn + 1e-12)
+            f1 = 2 * p * r / (p + r + 1e-12)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thr = tau
+
+        return float(best_thr)
 
     @torch.no_grad()
     def _get_scores_all(self, dataloader, desc) -> np.ndarray:
@@ -77,24 +91,17 @@ class DetectorOracleAD:
         self.model.eval()
         for batch in tqdm(dataloader, desc=desc):
             inputs, _ = prepare_inputs(batch)
+            scores = self.scorer.get_anomaly_scores(inputs)
 
-            scores = self.scorer.get_anomaly_scores(inputs)  # 기대: [B] 또는 [B,T]
-
-            if scores.ndim == 1:          # [B] (window-end score)
+            if scores.ndim == 1:
                 scores_all.append(scores)
-            elif scores.ndim == 2:        # [B,T] 이면 마지막 timestep만 사용
+            elif scores.ndim == 2:
                 scores_all.append(scores[:, -1])
             else:
                 raise ValueError(f"Unexpected score shape: {scores.shape}")
 
         scores_all = torch.flatten(torch.cat(scores_all, dim=0))
         return scores_all.detach().cpu().numpy()
-
-    def _get_train_scores(self):
-        return self._get_scores_all(self.train_loader, "train scores")
-
-    def _get_val_scores(self):
-        return self._get_scores_all(self.val_loader, "val scores")
 
     def _get_test_scores(self):
         return self._get_scores_all(self.test_loader, "test scores")
@@ -131,29 +138,13 @@ class DetectorOracleAD:
 
     @staticmethod
     def get_results(scores, pred_pa, labels, slidingWindow):
-        results = {}
-
-        # auroc = float(roc_auc_score(labels, scores))
-        # results.update({"AUROC": auroc})
-
-        # precision, recall, thresholds = precision_recall_curve(labels, scores)
-        # auprc = float(auc(recall, precision))
-        # results.update({"AUPRC": auprc})
-
-        # f1 = 2 * (precision * recall) / (precision + recall + 1e-12)
-        # f1_best = np.nanmax(f1)
-        # precision_best = precision[np.argmax(f1)]
-        # recall_best = recall[np.argmax(f1)]
-        # results.update({"Precision": precision_best, "Recall": recall_best, "F1": f1_best})
-
-        vus_window = get_median_anomaly_length(labels)
         results = get_metrics(
-            score=scores, 
-            labels=labels, 
-            slidingWindow=vus_window, 
-            pred=None, 
-            version='default', # 메모리 절약 모드 : opt_mem
-            thre=200          #N=250 (또는 200)
+            score=scores,
+            labels=labels,
+            slidingWindow=slidingWindow,
+            pred=None,        # threshold-independent metrics는 oracle threshold 사용
+            version='default',
+            thre=200
         )
 
         if pred_pa is not None:
@@ -161,16 +152,19 @@ class DetectorOracleAD:
             fp = np.sum((pred_pa == 1) & (labels == 0))
             fn = np.sum((pred_pa == 0) & (labels == 1))
             precision_pa = tp / (tp + fp + 1e-12)
-            recall_pa = tp / (tp + fn + 1e-12)
+            recall_pa    = tp / (tp + fn + 1e-12)
             f1_pa = 2 * (precision_pa * recall_pa) / (precision_pa + recall_pa + 1e-12)
-            results.update({"Precision_PA": precision_pa, "Recall_PA": recall_pa, "F1_PA": f1_pa})
+            results.update({
+                "Precision_PA": precision_pa,
+                "Recall_PA": recall_pa,
+                "F1_PA": f1_pa
+            })
 
         return results
 
     def save_results(self, results):
-        results_string = ", ".join([f"{metric}: {value:.04f}" for metric, value in results.items()])
+        results_string = ", ".join([f"{k}: {v:.4f}" for k, v in results.items()])
         print(results_string)
-
         with open(os.path.join(mkdir(self.cfg.RESULT_DIR) / "test_result.txt"), "w") as f:
             f.write(results_string)
 

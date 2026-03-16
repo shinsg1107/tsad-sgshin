@@ -42,7 +42,7 @@ class ScorerOracleAD:
 
         # true x^t 만들기 (모델 out에 없으면 여기서 복원)
         if "x_true_next" in out:
-            x_true_next = out["x_true_next"]  # [B,N]
+            x_true_next = out["y_next"]  # [B,N]
         else:
             L = self.cfg.DATA.WIN_SIZE
             N = self.cfg.DATA.N_VAR
