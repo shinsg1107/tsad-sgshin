@@ -136,8 +136,12 @@ class OracleADTrainer(Trainer):
         dist2 = x2 + x2.transpose(1, 2) - 2.0 * prod
         return dist2.clamp_min_(0.0)
 
-    def _pairwise_l2(self, c_star: torch.Tensor) -> torch.Tensor:
-        return (self._pairwise_sq_l2(c_star) + 1e-12).sqrt()
+    def _pairwise_l2(self, c_star):
+        dist2 = self._pairwise_sq_l2(c_star)
+        # 대각선(self-distance=0) 처리
+        eye = torch.eye(dist2.size(1), device=dist2.device).unsqueeze(0)
+        dist2 = dist2 + eye * 1e-6  # 대각선에만 epsilon 추가
+        return dist2.sqrt()
 
     def _accumulate_sls(self, D_batch: torch.Tensor):
         with torch.no_grad():
@@ -187,7 +191,7 @@ class OracleADTrainer(Trainer):
             x_hat_past = x_hat_past.squeeze(-1)
 
         pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
-        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=-1).sqrt().mean() #논문형태로(변수별 L2 norm)
+        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
         return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):

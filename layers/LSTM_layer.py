@@ -225,21 +225,24 @@ class LSTMDecoder(nn.Module):
             ci = c_star[:, i, :]  # [B, D]
             z = torch.zeros(B, self.L, self.out_dim, device=ci.device, dtype=ci.dtype)
 
-            # 학습 가능한 projection으로 hidden/cell 초기화
-            h0 = torch.tanh(self.init_h_list[i](ci)).view(self.num_layers, B, self.hidden_dim).contiguous()
-            c0 = torch.tanh(self.init_c_list[i](ci)).view(self.num_layers, B, self.hidden_dim).contiguous()
+            # [B, num_layers * hidden_dim] → [B, num_layers, hidden_dim] → [num_layers, B, hidden_dim]
+            h0 = torch.tanh(self.init_h_list[i](ci))
+            h0 = h0.view(B, self.num_layers, self.hidden_dim).permute(1, 0, 2).contiguous()
+
+            c0 = torch.tanh(self.init_c_list[i](ci))
+            c0 = c0.view(B, self.num_layers, self.hidden_dim).permute(1, 0, 2).contiguous()
 
             Y, _ = self.lstm_list[i](z, (h0, c0))  # [B, L, hidden_dim]
 
-            # 단일 linear로 전체 출력
             O = self.out_list[i](Y).squeeze(-1)     # [B, L]
 
-            recon_i = O[:, :self.T]                 # [B, T] = [B, L-1]
+            recon_i = O[:, :self.T]                 # [B, T]
             next_i  = O[:, self.T]                  # [B]
 
-            x_hat_past_list.append(recon_i.unsqueeze(1))        # [B, 1, T]
+            x_hat_past_list.append(recon_i.unsqueeze(1))             # [B, 1, T]
             x_hat_next_list.append(next_i.unsqueeze(1).unsqueeze(-1))  # [B, 1, 1]
 
         x_hat_past = torch.cat(x_hat_past_list, dim=1).unsqueeze(-1)  # [B, N, T, 1]
         x_hat_next = torch.cat(x_hat_next_list, dim=1)                # [B, N, 1]
+        
         return x_hat_past, x_hat_next

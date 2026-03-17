@@ -70,6 +70,7 @@ def load_config(args):
         cfg.DATA.N_VAR = valid_datasets["PSM"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["PSM"]
         cfg.SOLVER.MAX_EPOCH = 20
+        cfg.SOLVER.BASE_LR = 5e-5
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
         cfg.TEST.SLIDING_WINDOW = sliding_windows.get(cfg.DATA.NAME, 100)
