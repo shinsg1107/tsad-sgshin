@@ -45,12 +45,15 @@ class ORACLEAD(nn.Module):
 
         # 1) per-variable LSTM encoder
         h_seq, _ = self.encoder(x_past)              # [B,N,T,D]
+        
 
         # 2) attention pooling over time
         c, alpha_time = self.pool(h_seq)             # c: [B,N,D], alpha_time: [B,N,T]
 
+
         # 3) MHSA over variables
         c_star, attn_var = self.mhsa(c)              # c_star: [B,N,D]
+
 
         # 4) decoder: reconstruct past + predict next
         x_hat_past, x_hat_next = self.decoder(c_star)  # [B,N,T,1], [B,N,1]

@@ -135,9 +135,17 @@ _C.ORACLEAD.MHSA.ATTN_DROPOUT = 0
 _C.ORACLEAD.MHSA.PROJ_DROPOUT = 0 # 없으면 DROPOUT을 fallback
 _C.ORACLEAD.MHSA.DROPOUT = 0       # optional fallback
 
-_C.ORACLEAD.MHSA.PRE_NORM = True
+_C.ORACLEAD.MHSA.PRE_NORM = False
 _C.ORACLEAD.MHSA.RESIDUAL = False
 _C.ORACLEAD.MHSA.MASK_SELF = False   # optional
+
+# Causal Graph
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH = CN()
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH.ENABLE = False
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH.PATH = "/data/Causal_graph"           # .npy 파일 경로
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH.ALPHA = 0.5         # 반영 강도
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH.MODE = "additive"   # additive / multiplicative / soft_bias
+_C.ORACLEAD.MHSA.CAUSAL_GRAPH.NORMALIZE = True    # [0,1] 정규화 여부
 
 #LSTM Decoder
 _C.ORACLEAD.DECODER = CN()

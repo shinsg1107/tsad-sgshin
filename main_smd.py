@@ -48,7 +48,7 @@ def run_single_machine(args, machine, seeds, base_result_dir, base_ckpt_dir):
         print(f"\n--- Seed {seed} ---")
 
         # seed/machine별 cfg 독립적으로 로드
-        cfg = load_config(args)
+        cfg, _ = load_config(args)
         set_devices(cfg.VISIBLE_DEVICES)
 
         cfg.DATA.SMD_ENTITY      = machine
@@ -110,7 +110,7 @@ def summarize_machine(last_epoch_rows, machine, save_dir):
 
 def main():
     args = parse_args()
-    cfg  = load_config(args)
+    cfg, _  = load_config(args)
 
     set_devices(cfg.VISIBLE_DEVICES)
 

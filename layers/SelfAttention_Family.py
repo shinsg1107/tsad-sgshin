@@ -274,8 +274,8 @@ class OracleAD_MHSA(nn.Module):
         self.proj_dropout: float = float(getattr(self.cfg_m, "PROJ_DROPOUT", float(getattr(self.cfg_m, "DROPOUT", 0.0))))
 
         # Block options
-        self.pre_norm: bool = bool(getattr(self.cfg_m, "PRE_NORM", True))
-        self.residual: bool = bool(getattr(self.cfg_m, "RESIDUAL", True))
+        self.pre_norm: bool = bool(getattr(self.cfg_m, "PRE_NORM", False))
+        self.residual: bool = bool(getattr(self.cfg_m, "RESIDUAL", False))
         self.mask_self: bool = bool(getattr(self.cfg_m, "MASK_SELF", False))  # optional: block diagonal self-attn
 
         assert self.dim % self.num_heads == 0, f"DIM({self.dim}) must be divisible by NUM_HEADS({self.num_heads})"

@@ -187,7 +187,7 @@ class OracleADTrainer(Trainer):
             x_hat_past = x_hat_past.squeeze(-1)
 
         pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
-        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=-1).sqrt().mean() #논문형태로(변수별 L2 norm)
+        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
         return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):

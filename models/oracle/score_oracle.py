@@ -6,7 +6,7 @@ class ScorerOracleAD:
         self.cfg = cfg
         self.model = model.eval()
         sls_path = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, "sls_latest.pt")
-        self.sls = torch.load(sls_path, map_location="cpu") if os.path.isfile(sls_path) else None
+        self.sls = torch.load(sls_path, map_location="cpu", weights_only=True) if os.path.isfile(sls_path) else None
         print(f"SLS path: {sls_path}")
         print(f"SLS loaded: {self.sls is not None}")
         if self.sls is not None:
@@ -54,6 +54,8 @@ class ScorerOracleAD:
 
         # (15) prediction score: mean_i |x_i^t - xhat_i^t|
         P = (x_true_next - x_hat_next).abs().mean(dim=-1)  # [B]
+
+        
 
         # (16) deviation score: ||D^t - SLS||_F
         if self.sls is None:
