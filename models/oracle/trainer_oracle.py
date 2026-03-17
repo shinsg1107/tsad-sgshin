@@ -190,8 +190,10 @@ class OracleADTrainer(Trainer):
         if x_hat_past.dim() == 4 and x_hat_past.size(-1) == 1:
             x_hat_past = x_hat_past.squeeze(-1)
 
-        pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
-        recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
+        # pred_loss  = (x_hat_next - y_next).pow(2).sum(dim=-1).sqrt().mean()
+        # recon_loss = (x_hat_past - x_past_true).pow(2).sum(dim=(-1,-2)).sqrt().mean()
+        pred_loss = F.mse_loss(x_hat_next, y_next)
+        recon_loss = F.mse_loss(x_hat_past, x_past_true)
         return pred_loss, recon_loss, x_hat_next, x_hat_past
 
     def train_step(self, inputs):

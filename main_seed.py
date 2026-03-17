@@ -34,7 +34,7 @@ def run_single_seed(cfg, seed):
 
 def main():
     args = parse_args()
-    cfg  = load_config(args)
+    cfg, date = load_config(args, None)
 
     set_devices(cfg.VISIBLE_DEVICES)
 
@@ -53,7 +53,7 @@ def main():
         print(f"{'='*50}")
 
         # cfg는 매 seed마다 원본에서 다시 복사
-        cfg_seed = load_config(args)
+        cfg_seed, _ = load_config(args, date=date)
         set_devices(cfg_seed.VISIBLE_DEVICES)
 
         history = run_single_seed(cfg_seed, seed)

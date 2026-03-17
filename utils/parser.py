@@ -31,7 +31,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_config(args):
+def load_config(args, date):
     # Setup cfg.
     cfg = get_cfg_defaults()
     # Load config from cfg.
@@ -61,22 +61,23 @@ def load_config(args):
     if cfg.DATA.NAME == 'SWaT':
         cfg.DATA.N_VAR = valid_datasets["SWaT"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SWaT"]
-        cfg.SOLVER.MAX_EPOCH = 80
+        cfg.SOLVER.MAX_EPOCH = 40
     elif "SMD" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["SMD"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SMD"]
-        cfg.SOLVER.MAX_EPOCH = 50
+        cfg.SOLVER.MAX_EPOCH = 40
     elif "PSM" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["PSM"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["PSM"]
         cfg.SOLVER.MAX_EPOCH = 20
-        cfg.SOLVER.BASE_LR = 5e-5
+        cfg.SOLVER.BASE_LR = 1e-5
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
         cfg.TEST.SLIDING_WINDOW = sliding_windows.get(cfg.DATA.NAME, 100)
     
-    date = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+    if date is None:
+        date = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     cfg.TRAIN.CHECKPOINT_DIR = os.path.join(cfg.TRAIN.CHECKPOINT_DIR, cfg.DATA.NAME, date)
     cfg.RESULT_DIR = os.path.join(cfg.RESULT_DIR, cfg.DATA.NAME, date)
 
-    return cfg
+    return cfg, date

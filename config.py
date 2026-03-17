@@ -139,6 +139,15 @@ _C.ORACLEAD.MHSA.PRE_NORM = True
 _C.ORACLEAD.MHSA.RESIDUAL = False
 _C.ORACLEAD.MHSA.MASK_SELF = False   # optional
 
+#CAUSAL
+_C.ORACLEAD.MHSA.CAUSAL = CN()
+_C.ORACLEAD.MHSA.CAUSAL.ENABLE = False
+_C.ORACLEAD.MHSA.CAUSAL.GRAPH_PATH = "/home/sgshin/workspace/SGTSAD/data/Causal_graph/PSM_graph.npy"     # .pt 또는 .npy 파일 경로
+_C.ORACLEAD.MHSA.CAUSAL.ALPHA = 1         # 가중치 강도
+_C.ORACLEAD.MHSA.CAUSAL.MODE = "additive"   # additive / multiplicative
+_C.ORACLEAD.MHSA.CAUSAL.NORMALIZE = True    # [0,1] 정규화 여부
+_C.ORACLEAD.MHSA.CAUSAL.TRANSPOSE = True   # causal graph 방향 transpose 여부
+
 #LSTM Decoder
 _C.ORACLEAD.DECODER = CN()
 _C.ORACLEAD.DECODER.DIM = 128          
