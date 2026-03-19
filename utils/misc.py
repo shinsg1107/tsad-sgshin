@@ -40,3 +40,16 @@ def mkdir(directory: Union[str, Path]):
         directory.mkdir(parents=True, exist_ok=True)
 
     return directory
+
+def load_causal_graph(path: str, normalize: bool = True) -> np.ndarray:
+    if path.endswith('.pt'):
+        cg = torch.load(path, map_location='cpu').float().numpy()
+    elif path.endswith('.npy'):
+        cg = np.load(path).astype(np.float32)
+    else:
+        raise ValueError(f"Unsupported format: {path}")
+    if normalize:
+        cg_min, cg_max = cg.min(), cg.max()
+        if cg_max > cg_min:
+            cg = (cg - cg_min) / (cg_max - cg_min)
+    return cg

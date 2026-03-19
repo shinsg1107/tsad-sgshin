@@ -116,7 +116,7 @@ def main():
 
     base_result_dir = cfg.RESULT_DIR
     base_ckpt_dir   = cfg.TRAIN.CHECKPOINT_DIR
-    seeds           = getattr(cfg, 'SEEDS', [0, 1, 2, 3, 4])
+    seeds           = getattr(cfg, 'SEEDS', [0, 1, 2])
     top_n           = getattr(cfg, 'TOP_N', 4)
 
     mkdir(base_result_dir)

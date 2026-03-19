@@ -21,30 +21,51 @@ class ORACLEAD(nn.Module):
         self.decoder = LSTMDecoder(cfg)
 
     def _standardize_input(self, x: torch.Tensor):
-        # x: [B,L,N] or [B,N,L]
-        assert x.dim() == 3, f"Expected 3D window input, got {x.shape}"
+        assert x.dim() == 3
         N = int(self.cfg_data.N_VAR)
         L = int(self.cfg_data.WIN_SIZE)
 
+        causal_extra = bool(getattr(
+            getattr(self.cfg_oraclead, "CAUSAL_ENCODER", None),
+            "USE_EXTRA_STEP", False
+        ))
+
+        if causal_extra:
+            # x: [B, L+1, N]
+            # x[:,0,:] = t=-1 (lag base)
+            # x[:,1:,:] = t=0~L-1
+            x_lag_base = x[:, 0, :]   # [B, N] window 이전 값
+            x = x[:, 1:, :]           # [B, L, N]
+        else:
+            x_lag_base = None
+
+        # shape 확인
         if x.size(1) == L and x.size(2) == N:
             x_ln = x
         elif x.size(1) == N and x.size(2) == L:
             x_ln = x.transpose(1, 2).contiguous()
         else:
-            raise ValueError(f"Unexpected input shape {x.shape}. Expect [B,L,N] or [B,N,L] with L={L}, N={N}")
+            raise ValueError(f"Unexpected shape {x.shape}")
 
-        x_past_ln = x_ln[:, :-1, :]  # [B, L-1, N]
-        y_next = x_ln[:, -1, :]      # [B, N]
+        x_past_ln = x_ln[:, :-1, :]   # [B, L-1, N]
+        y_next    = x_ln[:, -1, :]    # [B, N]
+        x_past    = x_past_ln.transpose(1,2).unsqueeze(-1)  # [B, N, T, 1]
 
-        x_past = x_past_ln.transpose(1, 2).unsqueeze(-1).contiguous()  # [B,N,T,1], T=L-1
-        return x_past, y_next
+        # x_lag 구성
+        if causal_extra and x_lag_base is not None:
+            x_lag = torch.zeros_like(x_past)
+            x_lag[:, :, 1:, :] = x_past[:, :, :-1, :]              # t>=1: 이전 step
+            x_lag[:, :, 0, :]  = x_lag_base.unsqueeze(-1)           # t=0: window 이전 값 ✅
+        else:
+            x_lag = None  # encoder에서 자동 생성 (t=0은 0 패딩)
+
+        return x_past, y_next, x_lag
 
     def forward(self, x):
-        x_past, y_next = self._standardize_input(x)  # x_past: [B,N,T,1], y_next: [B,N]
-        B, N, T, _ = x_past.shape
-
+        x_past, y_next, x_lag = self._standardize_input(x)
+        
         # 1) per-variable LSTM encoder
-        h_seq, _ = self.encoder(x_past)              # [B,N,T,D]
+        h_seq, _ = self.encoder(x_past, x_lag=x_lag)             # [B,N,T,D]
 
         # 2) attention pooling over time
         c, alpha_time = self.pool(h_seq)             # c: [B,N,D], alpha_time: [B,N,T]

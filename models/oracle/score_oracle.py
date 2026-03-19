@@ -39,18 +39,8 @@ class ScorerOracleAD:
         out = self.model(x)
         x_hat_next = out["x_hat_next"]      # [B,N]
         c_star     = out["c_star"]          # [B,N,D]
+        x_true_next = out["y_next"]
 
-        # true x^t 만들기 (모델 out에 없으면 여기서 복원)
-        if "x_true_next" in out:
-            x_true_next = out["y_next"]  # [B,N]
-        else:
-            L = self.cfg.DATA.WIN_SIZE
-            N = self.cfg.DATA.N_VAR
-            if x.dim() == 3 and x.size(1) == L and x.size(2) == N:
-                x_ln = x
-            else:
-                x_ln = x.transpose(1, 2).contiguous()  # [B,L,N] 가정
-            x_true_next = x_ln[:, -1, :]               # [B,N]
 
         # (15) prediction score: mean_i |x_i^t - xhat_i^t|
         P = (x_true_next - x_hat_next).abs().mean(dim=-1)  # [B]
