@@ -61,16 +61,19 @@ def load_config(args, date):
     if cfg.DATA.NAME == 'SWaT':
         cfg.DATA.N_VAR = valid_datasets["SWaT"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SWaT"]
-        cfg.SOLVER.MAX_EPOCH = 40
+        cfg.SOLVER.MAX_EPOCH = 50
+        cfg.ORACLEAD.CAUSAL_ENCODER.GRAPH_PATH = "/home/sgshin/workspace/SGTSAD/data/Causal_graph/SWaT_graph.npy"
     elif "SMD" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["SMD"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["SMD"]
         cfg.SOLVER.MAX_EPOCH = 40
+        cfg.ORACLEAD.CAUSAL_ENCODER.GRAPH_PATH = "/home/sgshin/workspace/SGTSAD/data/Causal_graph/SMD"
     elif "PSM" in cfg.DATA.NAME:
         cfg.DATA.N_VAR = valid_datasets["PSM"]
         cfg.TEST.SLIDING_WINDOW = sliding_windows["PSM"]
         cfg.SOLVER.MAX_EPOCH = 20
         cfg.SOLVER.BASE_LR = 1e-5
+        cfg.ORACLEAD.CAUSAL_ENCODER.GRAPH_PATH = "/home/sgshin/workspace/SGTSAD/data/Causal_graph/PSM_graph.npy"
     else:
         cfg.DATA.N_VAR = valid_datasets[cfg.DATA.NAME]
         cfg.TEST.SLIDING_WINDOW = sliding_windows.get(cfg.DATA.NAME, 100)

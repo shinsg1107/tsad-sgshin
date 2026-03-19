@@ -1,5 +1,3 @@
-# main_smd.py
-
 import os
 import numpy as np
 import pandas as pd
@@ -25,38 +23,59 @@ SMD_ALL_MACHINES = [
 
 def run_single_seed(cfg, seed):
     """단일 seed에 대해 학습 및 평가"""
-    set_seeds(seed)
     cfg.SEED = seed
+    set_seeds(seed)
 
     model   = build_model(cfg)
     trainer = build_trainer(cfg, model)
     trainer.train()
 
-    return trainer.history  # list of dicts
+    return trainer.history
 
 
-def run_single_machine(args, machine, seeds, base_result_dir, base_ckpt_dir):
-    """단일 machine에 대해 모든 seed 학습/평가"""
+def run_single_machine(args, machine, seeds, run_date, base_result_dir, base_ckpt_dir):
     print(f"\n{'='*60}")
     print(f"  Machine: {machine}")
     print(f"{'='*60}")
 
-    machine_history  = []
-    last_epoch_rows  = []
+    machine_history = []
+    last_epoch_rows = []
 
     for seed in seeds:
         print(f"\n--- Seed {seed} ---")
 
-        # seed/machine별 cfg 독립적으로 로드
-        cfg = load_config(args)
+        # 매 seed마다 cfg를 새로 로드하되 동일한 run_date 사용
+        cfg, _ = load_config(args, date=run_date)
         set_devices(cfg.VISIBLE_DEVICES)
 
-        cfg.DATA.SMD_ENTITY      = machine
+        # machine 설정
+        cfg.DATA.SMD_ENTITY = machine
+
+        # seed별 경로 설정
         cfg.RESULT_DIR           = os.path.join(base_result_dir, machine, f"seed_{seed}")
         cfg.TRAIN.CHECKPOINT_DIR = os.path.join(base_ckpt_dir,   machine, f"seed_{seed}")
 
         mkdir(cfg.RESULT_DIR)
         mkdir(cfg.TRAIN.CHECKPOINT_DIR)
+
+        # machine별 causal graph 경로 설정
+        causal_enable = bool(getattr(
+            getattr(cfg.ORACLEAD, "CAUSAL_ENCODER", None),
+            "ENABLE", False
+        ))
+        if causal_enable:
+            machine_id = machine.replace("machine-", "")  # "1-1"
+            graph_path = os.path.join(
+                "/home/sgshin/workspace/SGTSAD/data/Causal_graph/SMD",
+                f"SMD_{machine_id}_graph.npy"
+            )
+            if os.path.isfile(graph_path):
+                cfg.ORACLEAD.CAUSAL_ENCODER.GRAPH_PATH = graph_path
+                print(f"  Causal graph: {graph_path}")
+            else:
+                print(f"  [Warning] Causal graph not found: {graph_path}")
+                print(f"  Disabling causal encoder for {machine}")
+                cfg.ORACLEAD.CAUSAL_ENCODER.ENABLE = False
 
         history = run_single_seed(cfg, seed)
 
@@ -66,7 +85,6 @@ def run_single_machine(args, machine, seeds, base_result_dir, base_ckpt_dir):
                 record['Seed']    = seed
             machine_history.extend(history)
 
-            # 마지막 epoch 결과
             last = history[-1].copy()
             last['Machine'] = machine
             last['Seed']    = seed
@@ -76,10 +94,6 @@ def run_single_machine(args, machine, seeds, base_result_dir, base_ckpt_dir):
 
 
 def summarize_machine(last_epoch_rows, machine, save_dir):
-    """
-    machine의 seed별 마지막 epoch 결과 요약 및 저장.
-    mean row 반환 (ranking용)
-    """
     if not last_epoch_rows:
         return None
 
@@ -105,18 +119,25 @@ def summarize_machine(last_epoch_rows, machine, save_dir):
     df_summary.to_csv(summary_csv, index=False)
     print(f"[{machine}] seed summary saved: {summary_csv}")
 
+    # 터미널 출력
+    print(f"\n=== [{machine}] Mean ± Std over seeds ===")
+    for col in metric_cols:
+        if col.startswith("Test/"):
+            print(f"  {col}: {mean_row[col]:.4f} ± {std_row[col]:.4f}")
+
     return mean_row
 
 
 def main():
     args = parse_args()
-    cfg  = load_config(args)
 
+    # 첫 번째 load에서 run_date 결정
+    cfg, run_date = load_config(args, None)
     set_devices(cfg.VISIBLE_DEVICES)
 
     base_result_dir = cfg.RESULT_DIR
     base_ckpt_dir   = cfg.TRAIN.CHECKPOINT_DIR
-    seeds           = getattr(cfg, 'SEEDS', [0, 1, 2])
+    seeds           = getattr(cfg, 'SEEDS', [0, 1, 2, 3, 4])
     top_n           = getattr(cfg, 'TOP_N', 4)
 
     mkdir(base_result_dir)
@@ -131,16 +152,16 @@ def main():
 
     for machine in SMD_ALL_MACHINES:
         machine_history, last_epoch_rows = run_single_machine(
-            args        = args,
-            machine     = machine,
-            seeds       = seeds,
+            args            = args,
+            machine         = machine,
+            seeds           = seeds,
+            run_date        = run_date,
             base_result_dir = base_result_dir,
             base_ckpt_dir   = base_ckpt_dir,
         )
 
         all_history.extend(machine_history)
 
-        # machine별 summary 저장 + mean_row 수집
         machine_save_dir = os.path.join(base_result_dir, machine)
         mean_row = summarize_machine(last_epoch_rows, machine, machine_save_dir)
         if mean_row is not None:
@@ -156,7 +177,7 @@ def main():
         print(f"\nAll history saved: {all_csv}")
 
     # ------------------------------------------------------------------ #
-    # 2. machine ranking (모든 metric 기준)
+    # 2. machine ranking
     # ------------------------------------------------------------------ #
     if machine_mean_rows:
         ranking_save_dir = os.path.join(base_result_dir, 'rankings')
@@ -166,7 +187,6 @@ def main():
             top_n             = top_n,
         )
 
-        # overall ranking 기준 top_n 출력
         if df_ranking is not None and 'Rank/Overall' in df_ranking.columns:
             top_machines = df_ranking.sort_values('Rank/Overall').head(top_n)['Machine'].tolist()
             print(f"\n=== Recommended Top {top_n} Machines (Overall) ===")
