@@ -74,7 +74,11 @@ class ORACLEAD(nn.Module):
         c_star, attn_var = self.mhsa(c)              # c_star: [B,N,D]
 
         # 4) decoder: reconstruct past + predict next
-        x_hat_past, x_hat_next = self.decoder(c_star)  # [B,N,T,1], [B,N,1]
+        x_hat_past, x_hat_next = self.decoder(
+            c_star,
+            h_enc=h_seq if self.decoder.causal_mode is not None else None
+        )
+
         x_hat_past = x_hat_past.squeeze(-1)            # [B,N,T]
         x_hat_next = x_hat_next.squeeze(-1)            # [B,N]
         

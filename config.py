@@ -140,13 +140,6 @@ _C.ORACLEAD.MHSA.RESIDUAL = False
 _C.ORACLEAD.MHSA.MASK_SELF = False   # optional
 
 #CAUSAL
-# _C.ORACLEAD.MHSA.CAUSAL = CN()
-# _C.ORACLEAD.MHSA.CAUSAL.ENABLE = False
-# _C.ORACLEAD.MHSA.CAUSAL.GRAPH_PATH = "/home/sgshin/workspace/SGTSAD/data/Causal_graph/SWaT_graph.npy"     # .pt 또는 .npy 파일 경로
-# _C.ORACLEAD.MHSA.CAUSAL.ALPHA = 1         # 가중치 강도
-# _C.ORACLEAD.MHSA.CAUSAL.MODE = "additive"   # additive / multiplicative
-# _C.ORACLEAD.MHSA.CAUSAL.NORMALIZE = True    # [0,1] 정규화 여부
-# _C.ORACLEAD.MHSA.CAUSAL.TRANSPOSE = True   # causal graph 방향 transpose 여부
 
 _C.ORACLEAD.CAUSAL_ENCODER = CN()
 _C.ORACLEAD.CAUSAL_ENCODER.ENABLE    = True
@@ -170,7 +163,8 @@ _C.ORACLEAD.DECODER.BIDIRECTIONAL = False
 
 _C.ORACLEAD.DECODER.OUT_DIM = 1        # sensor value dimension
 _C.ORACLEAD.DECODER.PAST_LEN = 9       # L-1 (예: WIN_SIZE=10이면 9)
-_C.ORACLEAD.DECODER.SHARED = False     # 논문처럼 변수별 decoder면 False
+_C.ORACLEAD.DECODER.CAUSAL_RESIDUAL = False
+_C.ORACLEAD.DECODER.CAUSAL_MODE = "linear"   # max_pad/topk/weighted/linear
 
 
 _C.SCORER = CN()
